@@ -1,0 +1,4 @@
+html, body { min-height: 600px; height: auto; overflow: auto; }
+main { padding: 18px; }
+h1 { font-size: 19px; color: var(--heading); }
+pre, #simnet-status { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); }

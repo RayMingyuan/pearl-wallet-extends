@@ -1,0 +1,83 @@
+{
+  "sourceCommit": "d7c517d267f10f5bcbbdc366f3e603942f9a5ab5",
+  "sourcePath": "wallet/waddrmgr/common_test.go",
+  "notice": "Public upstream test data only. Never use for funds.",
+  "seedHex": "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064",
+  "vectors": [
+    {
+      "path": "m/86'/808276'/0'/0/0",
+      "publicKeyHex": "02af08f3d1bb1ccaed1659e88b5a8d73f412628e44ddcbcbdc54b6b81f20c31375",
+      "programHex": "87493abd360c531808c25f6e67405724926cc785580c4c724dd0142c3abcc14b",
+      "address": "prl1psayn40fkp3f3szxztahxwszhyjfxe3u9tqxycujd6q2zcw4uc99sm7r4na"
+    },
+    {
+      "path": "m/86'/808276'/0'/0/1",
+      "publicKeyHex": "039879f3954272490ec03cc90377f77b8dd2df107cb011398f9d5b0b459f0a0978",
+      "programHex": "63578fd2baeeab6b142fd4f1ea306ef8123fc765d92ff7f9cdd144c4efba4822",
+      "address": "prl1pvdtcl546a64kk9p06nc75vrwlqfrl3m9myhl07wd69zvfma6fq3q9aduze"
+    },
+    {
+      "path": "m/86'/808276'/0'/0/2",
+      "publicKeyHex": "031dd01b86d496f37ed2b2daffb79adac90c13dd972733822bff8d15d0c2834a28",
+      "programHex": "ccc519680a1b2777aba66549030742f1ca05af391700f94f6a98e8ea695ce91c",
+      "address": "prl1penz3j6q2rvnh02axv4ysxp6z789qtteezuq0jnm2nr5w562uaywqp6a2pw"
+    },
+    {
+      "path": "m/86'/808276'/0'/0/3",
+      "publicKeyHex": "03d2443e73ae88abf7980408cc5a8a0855a1b1ef491ad780f844b058e8ab64a768",
+      "programHex": "6ff41efc4509a7413789c18ae473822d1c3e39dc575db6d8324d02afb1b65427",
+      "address": "prl1pdl6palz9pxn5zdufcx9wguuz95wruwwu2awmdkpjf5p2lvdk2snsq5kd62"
+    },
+    {
+      "path": "m/86'/808276'/0'/0/4",
+      "publicKeyHex": "0273e4a9dfd8f7c68e99c5c912634e76f27a80960d07e906caf7b1bf91faea0bd0",
+      "programHex": "78373d3f341d094a09789f621f326e682985043537745ebf3e4197463074dc02",
+      "address": "prl1p0qmn60e5r5y55ztcna3p7vnwdq5c2pp4xa69a0e7gxt5vvr5mspq9rv6jt"
+    },
+    {
+      "path": "m/86'/808276'/0'/1/0",
+      "publicKeyHex": "03efe292b974eca9507b2fe823c256c4a2fb820d0ba3106bc68a16e871852e5503",
+      "programHex": "277d9ac356fa9614d3ae146ba3fa5ac4d0e7fd03036200155e72802e40db4611",
+      "address": "prl1pya7e4s6kl2tpf5awz34687j6cngw0lgrqd3qq927w2qzusxmgcgs4yad5m"
+    },
+    {
+      "path": "m/86'/808276'/0'/1/1",
+      "publicKeyHex": "03894250e82aa208eb5660744374c9510704a1d559c92c85b9b33ee753db4a2e21",
+      "programHex": "ccce4386e592c0299cf4032abfe05b4d2c8d58b8c5236b659c8b8d99f41a111e",
+      "address": "prl1pen8y8ph9jtqzn885qv4tlczmf5kg6k9cc53kkevu3wxenaq6zy0qs6rdc5"
+    },
+    {
+      "path": "m/86'/808276'/0'/1/2",
+      "publicKeyHex": "023a16a31e71313a2ec965dab8bbe054481dcb878d6c33bbacd918ef3547911f95",
+      "programHex": "009521f58c3829a719430f0fc3d60de2283edfc3b2ced101ac6cda1c7c5d7921",
+      "address": "prl1pqz2jravv8q56wx2rpu8u84sdug5rah7rkt8dzqdvdndpclza0ysserpyel"
+    },
+    {
+      "path": "m/86'/808276'/0'/1/3",
+      "publicKeyHex": "0308ece0db6932bf9102577f492c6f1037f3fc7f25d66580a544c2abeddff3fb26",
+      "programHex": "6e3f5dc0468e2b52399ea25359dedadcd935951c514e3c9016f3c3adf06c6751",
+      "address": "prl1pdcl4mszx3c44ywv75ff4nhk6mnvnt9gu298reyqk70p6murvvagsyt898x"
+    },
+    {
+      "path": "m/86'/808276'/0'/1/4",
+      "publicKeyHex": "02cc2b418df288e09fa03018b0fee6ef9296834a9ddab04836ff707bc4bc4962f7",
+      "programHex": "fb236d90a2d3dbecaf1b77432926cf43fb721f65ffd71a079884452686cc4a76",
+      "address": "prl1plv3kmy9z60d7etcmwapjjfk0g0ahy8m9llt35pucs3zjdpkvffmqcgrxkq"
+    }
+  ],
+  "bip39": {
+    "notice": "Public zero-entropy BIP39 test phrase; seed independently calculated with Python hashlib.pbkdf2_hmac under the official empty-passphrase contract, not copied from an upstream Pearl vector.",
+    "entropyHex": "00000000000000000000000000000000",
+    "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    "passphrase": "",
+    "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
+  },
+  "leadingZero": {
+    "sourcePath": "node/btcutil/hdkeychain/extendedkey_test.go",
+    "sourceTest": "TestLeadingZero",
+    "seedHex": "000000000000000000000000000000000000000000000000000000000000018f",
+    "path": "m/0'/0'",
+    "standardChildHex": "a9b6b30a5b90b56ed48728c73af1d8a7ef1e9cc372ec21afcc1d9bdf269b0988",
+    "legacyChildHex": "ea46d8f58eb863a2d371a938396af8b0babe85c01920f59a8044412e70e837ee"
+  }
+}

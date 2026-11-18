@@ -1,0 +1,35 @@
+{
+  "name": "pearl-pocket",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "Community edition Pearl wallet. Keeps the seed on device, queries discovered addresses, and broadcasts only after confirmation.",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "build:simnet": "node scripts/build.js --simnet",
+    "test": "node scripts/build.js && node scripts/build.js --simnet && node --test",
+    "test:local": "node scripts/local-chain.js",
+    "test:simnet": "node scripts/build.js --simnet && node scripts/check-simnet-browser.js",
+    "dev:simnet": "node scripts/local-chain.js --serve",
+    "pack": "node scripts/build.js && node scripts/pack.js",
+    "pack:simnet": "node scripts/build.js --simnet && node scripts/pack.js --simnet"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "@noble/curves": "2.4.0",
+    "@scure/base": "2.4.0",
+    "@scure/bip32": "2.4.0",
+    "@scure/bip39": "2.4.0",
+    "@noble/hashes": "2.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.11",
+    "jsqr": "1.4.0",
+    "linkedom": "0.18.12",
+    "pngjs": "7.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

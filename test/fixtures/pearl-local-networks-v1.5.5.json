@@ -1,0 +1,26 @@
+{
+  "notice": "Generated using official code and public test seed. Never fund these keys.",
+  "sourceCommit": "d7c517d267f10f5bcbbdc366f3e603942f9a5ab5",
+  "vectors": [
+    {
+      "addresses": [
+        "rprl1pc8du0xq0z0gr3ft7eaqpdtztkjf9gzmjy3qmxxlgaymtxa0dcumqyhqt45",
+        "rprl1pe9l2z6zah6a5sspf377zpgzjerpkarfhsgd4ck60wr4ncd5vf5sqa9e2tj",
+        "rprl1p6nun4sakj570adkpl48szzw22pywy7f3h52dc42uqgx29m6rl2nqp4g0ds"
+      ],
+      "chain": "regtest",
+      "coinType": 1,
+      "genesis": "78d0ab27df6a51a8e9dbbdefffca1ebbbeb3818cb083ce2c2f43b047247e5832"
+    },
+    {
+      "addresses": [
+        "rprl1pc8du0xq0z0gr3ft7eaqpdtztkjf9gzmjy3qmxxlgaymtxa0dcumqyhqt45",
+        "rprl1pe9l2z6zah6a5sspf377zpgzjerpkarfhsgd4ck60wr4ncd5vf5sqa9e2tj",
+        "rprl1p6nun4sakj570adkpl48szzw22pywy7f3h52dc42uqgx29m6rl2nqp4g0ds"
+      ],
+      "chain": "simnet",
+      "coinType": 1,
+      "genesis": "78d0ab27df6a51a8e9dbbdefffca1ebbbeb3818cb083ce2c2f43b047247e5832"
+    }
+  ]
+}

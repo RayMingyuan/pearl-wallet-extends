@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pearla</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="wallet">
+    <header class="top" id="topBar" hidden>
+      <div class="chip">
+        <button type="button" class="switch" id="accountSwitch">
+          <img class="avatar" id="avatar" src="icons/pearl.png" width="28" height="28" alt="" aria-hidden="true">
+          <span class="who"><b id="switchName">Account 1</b><small id="accountKind" hidden></small></span>
+        </button>
+        <button type="button" class="addr-hit" id="copySwitch" data-i18n-aria-label="top.copyAddress" aria-label="Copy current address">
+          <small id="switchAddr"></small>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8.5h9.5V20H8zM6.5 15.5H5.5A1.5 1.5 0 0 1 4 14V4.5h9.5V6"/></svg>
+        </button>
+      </div>
+      <span class="net" id="netDot"><i></i>Mainnet</span>
+    </header>
+    <div class="body">
+      <p class="hint bad" id="boot-state" data-i18n="boot.starting">The UI is still starting.</p>
+
+      <section class="screen welcome" id="screen-welcome" hidden>
+        <div class="welcome-bar">
+          <button type="button" class="net welcome-net" id="welcomeNet" data-i18n-aria-label="network.title" aria-label="Network">
+            <i aria-hidden="true"></i>
+            <span id="welcomeNetLabel" data-i18n="net.mainnet">Mainnet</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+          </button>
+        </div>
+        <div class="welcome-hero">
+          <img class="brand-lockup" src="icons/logo-wordmark.png" width="280" height="115" data-i18n-alt="welcome.brandAlt" alt="Pearla — The pearl in your pocket.">
+        </div>
+        <div class="welcome-actions">
+          <button type="button" class="btn primary" id="createWallet" data-i18n="welcome.create">Create new wallet</button>
+          <button type="button" class="btn ghost" id="importWallet" data-i18n="welcome.importExisting">I already have a wallet</button>
+          <button type="button" class="btn ghost" id="watchWallet" data-i18n="welcome.watchOnly">Watch-only wallet</button>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-password" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-welcome" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="password.title">Set password</h2></div>
+        <div class="progress" aria-hidden="true"><i style="width:25%"></i></div>
+        <p class="sub" id="pwStepNote" data-i18n="password.stepNote">Used to unlock on this device. It cannot be recovered if lost and does not replace your recovery phrase.</p>
+        <div class="pw-card">
+          <label for="pw1" data-i18n="password.label">Password</label>
+          <div class="field-wrap">
+            <input id="pw1" type="password" autocomplete="new-password" data-i18n-placeholder="password.placeholderMin" placeholder="At least 8 characters" aria-describedby="strengthText">
+            <button type="button" class="field-eye" id="togglePw1" data-i18n-aria-label="password.show" aria-label="Show password" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <div class="meter" id="pwMeter" data-level="empty" aria-hidden="true"><i id="meterBar"></i></div>
+          <p class="hint" id="strengthText" data-i18n="password.strength.emptyHint">At least 8 characters; longer is better.</p>
+          <label for="pw2" data-i18n="password.confirmLabel">Confirm password</label>
+          <div class="field-wrap">
+            <input id="pw2" type="password" autocomplete="new-password" data-i18n-placeholder="password.confirmPlaceholder" placeholder="Enter again" aria-describedby="pwError">
+            <button type="button" class="field-eye" id="togglePw2" data-i18n-aria-label="password.show" aria-label="Show password" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <p class="hint bad" role="alert" id="pwError"></p>
+        <button type="button" class="btn primary docked" id="pwNext" data-i18n="action.continue">Continue</button>
+      </section>
+
+      <section class="screen" id="screen-notice" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-password" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="notice.title">Before you continue</h2></div>
+        <div class="progress"><i style="width:50%"></i></div>
+        <label data-i18n="notice.lengthLabel">Recovery phrase length</label>
+        <div class="choices" id="mnemonicLengthChoices" role="radiogroup" data-i18n-aria-label="notice.lengthGroup" aria-label="Recovery phrase length">
+          <button type="button" data-words="12" aria-checked="true" data-i18n="notice.words12">12 words</button>
+          <button type="button" data-words="24" aria-checked="false" data-i18n="notice.words24">24 words</button>
+        </div>
+        <div class="note" id="noticeNote" data-i18n="notice.note12">These 12 words are the key to your account. If you lose them they cannot be restored. Do not screenshot or share them.</div>
+        <label class="check"><input type="checkbox" id="ackRisk"><span data-i18n="notice.ack">I understand they cannot be recovered for me</span></label>
+        <p class="hint bad" role="alert" id="noticeError"></p>
+        <button type="button" class="btn primary docked" id="noticeNext" data-i18n="action.continue">Continue</button>
+      </section>
+
+      <section class="screen" id="screen-mnemonic" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-notice" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="mnemonic.title">Write down your recovery phrase</h2></div>
+        <div class="progress"><i style="width:75%"></i></div>
+        <button type="button" class="btn ghost" id="revealWords" data-i18n="mnemonic.reveal">Tap to reveal</button>
+        <div class="words" id="wordGrid" hidden></div>
+        <button type="button" class="btn text" id="copyWords" disabled data-i18n="mnemonic.copyRisky">Copy (easy to leak)</button>
+        <p class="hint" data-i18n="mnemonic.copyHint">Copying puts it on the clipboard. Clear it as soon as you are done.</p>
+        <label class="check"><input type="checkbox" id="ackHand"><span data-i18n="mnemonic.ackHand">I have written it down by hand</span></label>
+        <p class="hint bad" role="alert" id="wordError"></p>
+        <button type="button" class="btn primary docked" id="mnemonicNext" data-i18n="mnemonic.toVerify">Verify</button>
+      </section>
+
+      <section class="screen" id="screen-verify" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-mnemonic" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="verify.title">Tap to verify</h2></div>
+        <div class="progress"><i style="width:90%"></i></div>
+        <p class="sub" id="verifyHint" data-i18n="verify.hint">Tap word numbers 3, 7, 12. Tap again to change a pick.</p>
+        <div id="verifyFields"></div>
+        <p class="hint bad" role="alert" id="verifyError"></p>
+        <button type="button" class="btn primary docked" id="verifyNext" data-i18n="verify.complete">Finish</button>
+      </section>
+
+      <section class="screen" id="screen-import" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-welcome" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="import.title">Import</h2></div>
+        <div class="progress"><i style="width:33%"></i></div>
+        <button type="button" class="btn ghost" id="chooseMnemonic" data-i18n="import.chooseMnemonic">Recovery phrase</button>
+        <button type="button" class="btn ghost" id="chooseHex" data-i18n="import.chooseHex">Raw seed</button>
+        <p class="sub" data-i18n="import.oneVaultNote">This install keeps one recovery phrase or raw seed vault only.</p>
+      </section>
+
+      <section class="screen" id="screen-import-entry" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-import" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 id="importTitle" data-i18n="import.titleMnemonic">Import recovery phrase</h2></div>
+        <div class="progress"><i style="width:66%"></i></div>
+        <div class="seg" id="importSeg">
+          <button type="button" id="kindMnemonic" data-i18n="import.kindMnemonic">Recovery phrase</button>
+          <button type="button" id="kindHex" data-i18n="import.kindHex">Seed</button>
+        </div>
+        <input id="importKind" type="hidden" value="mnemonic">
+        <textarea id="importText" autocomplete="off" spellcheck="false" data-i18n-placeholder="import.placeholderMnemonic" placeholder="Words separated by spaces"></textarea>
+        <p class="hint bad" role="alert" id="importError"></p>
+        <button type="button" class="btn primary docked" id="importNext" data-i18n="action.continue">Continue</button>
+      </section>
+
+      <section class="screen" id="screen-watch" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-welcome" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="watch.title">Watch-only wallet</h2></div>
+        <p class="sub" data-i18n="watch.sub">Tracks only the address you paste. Balance and spends reflect net change for that address, not other receive/change addresses under the same seed, so totals may differ from a desktop wallet.</p>
+        <label for="watchInput" data-i18n="watch.addressLabel">Address</label>
+        <input id="watchInput" autocomplete="off" spellcheck="false" placeholder="prl1…">
+        <p class="hint bad" role="alert" id="watchError"></p>
+        <button type="button" class="btn primary docked" id="saveWatch" data-i18n="watch.start">Start watching</button>
+      </section>
+
+      <section class="screen" id="screen-done" hidden>
+        <img class="pearl-mark" src="icons/pearl.png" width="64" height="64" alt="" aria-hidden="true">
+        <h2 data-i18n="done.title">You're set</h2>
+        <p class="sub" id="doneText"></p>
+        <button type="button" class="btn primary docked" id="enterWallet" data-i18n="done.enter">Enter wallet</button>
+      </section>
+
+      <section class="screen" id="screen-lock" hidden>
+        <div class="lock-card" id="lockCard">
+          <div class="lock-logo" aria-hidden="true">
+            <img class="lock-logo-mark" src="icons/pearl.png" width="96" height="96" alt="">
+          </div>
+          <h2 data-i18n="lock.title">Locked</h2>
+          <p class="sub" id="lockHint" hidden></p>
+          <input id="lockPw" type="password" autocomplete="off" name="original-vault-password" data-i18n-placeholder="lock.placeholder" placeholder="Enter password" data-i18n-aria-label="lock.passwordAria" aria-label="Password">
+          <p class="hint bad" role="alert" id="lockError"></p>
+          <button type="button" class="btn primary docked" id="lockUnlock" data-i18n="lock.unlock">Unlock</button>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-home" hidden>
+        <div class="balance-card" id="balanceCard">
+          <div class="balance-top">
+            <div class="balance-brand">
+              <img class="token-icon" src="icons/pearl.webp" width="28" height="28" alt="" aria-hidden="true">
+              <span data-i18n="home.balanceLabel">Balance</span>
+            </div>
+            <div class="balance-tools">
+              <button type="button" class="btn text eye" id="hideBalance" aria-pressed="false" data-i18n-aria-label="home.hideBalance" aria-label="Hide balance">
+                <svg class="eye-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="eye-off" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M3 3l18 18M9.9 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a18.4 18.4 0 0 1-2.2 3.1M6.1 6.1A18 18 0 0 0 2 12s3.5 7 10 7a10.8 10.8 0 0 0 4.2-.8M10.5 10.6a3 3 0 0 0 4 4"/></svg>
+              </button>
+              <button type="button" class="btn text eye" id="lockNow" data-i18n-aria-label="home.lockNow" aria-label="Lock now">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6zM12 15v2"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="balance-hero">
+            <p class="fiat" id="homeFiat" data-i18n="home.fiat.loading">Fetching total value…</p>
+            <div class="balance-amount">
+              <p class="balance" id="homeBalance" data-i18n="home.balance.loading">Loading…</p>
+              <span class="balance-unit">PEARL</span>
+            </div>
+            <p class="spot" id="homeSpot" hidden></p>
+          </div>
+          <div id="homeAddr" class="sr-only"></div>
+        </div>
+        <div class="home-actions">
+          <button type="button" class="home-action" id="goReceive">
+            <i aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M7 14l5 5 5-5"/></svg></i>
+            <span data-i18n="home.receive">Receive</span>
+          </button>
+          <button type="button" class="home-action primary" id="goSend">
+            <i aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 19V5M7 10l5-5 5 5"/></svg></i>
+            <span data-i18n="home.send">Send</span>
+          </button>
+        </div>
+        <p class="limit" id="sendLimit" hidden></p>
+        <div class="home-activity-head">
+          <h3 data-i18n="home.recentActivity">Recent activity</h3>
+          <button type="button" class="btn text tiny" id="homeActivityAll" data-i18n="home.activityAll">All</button>
+        </div>
+        <div id="homeTx"></div>
+      </section>
+
+      <section class="screen" id="screen-receive" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-home" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="receive.title">Receive</h2></div>
+        <div class="qr-card"><canvas id="qr-canvas" width="220" height="220"></canvas></div>
+        <p class="hint bad" role="alert" id="qr-error"></p>
+        <p class="k" data-i18n="receive.addressLabel">Receive address</p>
+        <div class="segs" id="recvAddr"></div>
+        <button type="button" class="btn ghost" id="copyRecv" data-i18n="receive.copy">Copy address</button>
+      </section>
+
+      <section class="screen send-flow" id="screen-send" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-home" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="send.title">Send</h2></div>
+        <div class="steps" data-i18n-aria-label="send.progress12" aria-label="Send progress 1/2"><span class="on"></span><span></span></div>
+        <div class="send-body">
+          <label for="sendTo" data-i18n="send.toLabel">Recipient address</label>
+          <div class="field-row send-to-row">
+            <input id="sendTo" autocomplete="off" spellcheck="false" placeholder="prl1…" aria-describedby="whoError whoOk">
+          </div>
+          <p class="hint ok" id="whoOk" hidden data-i18n="send.addressOk">Address format looks good</p>
+          <p class="hint bad" role="alert" id="whoError"></p>
+
+          <label for="sendAmount" data-i18n="send.amountLabel">Amount</label>
+          <div class="amount-card">
+            <input id="sendAmount" class="amount-input" inputmode="decimal" placeholder="0" data-i18n-aria-label="send.amountAria" aria-label="Amount">
+            <span class="amount-unit">PEARL</span>
+          </div>
+          <div class="amt-row">
+            <span id="availLine" data-i18n="home.avail.loading">Available balance loading…</span>
+            <button type="button" class="btn ghost tiny" id="maxBtn" data-i18n="action.all">All</button>
+          </div>
+          <p class="hint bad" role="alert" id="amtError"></p>
+
+          <p class="k send-fee-label" data-i18n="send.networkFee">Network fee</p>
+          <div class="fees fees-compact">
+            <button type="button" class="fee" id="fee-slow" data-fee="slow"><b data-i18n="send.fee.slow">Slow</b><small data-fee-rate>—</small><small data-fee-est>—</small><small data-i18n="send.fee.etaSlow">~1 hour</small></button>
+            <button type="button" class="fee" id="fee-standard" data-fee="standard" aria-checked="true"><b data-i18n="send.fee.standard">Standard</b><small data-fee-rate>—</small><small data-fee-est>—</small><small data-i18n="send.fee.etaStandard">~20 min</small></button>
+            <button type="button" class="fee" id="fee-fast" data-fee="fast"><b data-i18n="send.fee.fast">Fast</b><small data-fee-rate>—</small><small data-fee-est>—</small><small data-i18n="send.fee.etaFast">~6 min</small></button>
+          </div>
+          <p class="sub fee-note" id="feeNote"></p>
+          <details class="advanced" id="feeCustom">
+            <summary id="customFee"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span data-i18n="send.customFee">Custom fee rate</span></summary>
+            <label for="customRate" data-i18n="send.customRateLabel">Grains per byte</label>
+            <input id="customRate" inputmode="numeric" data-i18n-placeholder="send.customRatePlaceholder" placeholder="e.g. 8">
+            <p class="custom-fee-est" id="customFeeEst" hidden></p>
+            <p class="hint" data-i18n="send.grainHint">1 PEARL = 100 million grains. You usually do not need to change this.</p>
+          </details>
+          <p class="hint bad" role="alert" id="sendError"></p>
+        </div>
+        <div class="send-foot">
+          <button type="button" class="btn primary" id="toConfirm" disabled data-i18n="action.review">Review</button>
+        </div>
+      </section>
+
+      <section class="screen send-flow" id="screen-confirm" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-send" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="confirm.title">Review</h2></div>
+        <div class="steps" data-i18n-aria-label="send.progress22" aria-label="Send progress 2/2"><span class="on"></span><span class="on"></span></div>
+        <div class="send-body">
+          <div class="summary">
+            <p class="k" data-i18n="confirm.recipient">Recipient address</p>
+            <div class="segs" id="confirmAddr"></div>
+            <div class="sum"><span data-i18n="confirm.amount">Amount</span><b id="confirmAmount"></b></div>
+            <div class="sum"><span data-i18n="confirm.fee">Network fee</span><b id="confirmFee"></b></div>
+            <div class="sum total"><span data-i18n="confirm.total">Total debit</span><b id="confirmTotal"></b></div>
+            <details class="confirm-more">
+              <summary data-i18n="confirm.changeDetails">Change details (usually ignorable)</summary>
+              <p class="k" data-i18n="confirm.changeAddress">Change address</p>
+              <div class="segs" id="confirmChange"></div>
+              <div class="sum"><span data-i18n="confirm.changeAmount">Change</span><b id="confirmChangeAmt"></b></div>
+            </details>
+          </div>
+        </div>
+        <div class="send-foot">
+          <button type="button" class="btn primary" id="confirmSend" data-i18n="confirm.signSend">Sign and send</button>
+        </div>
+      </section>
+
+      <section class="screen status-screen" id="screen-status" hidden>
+        <div class="status-hero">
+          <img class="status-orb" id="statusOrb" src="icons/pearl.webp" width="72" height="72" alt="" aria-hidden="true">
+          <h2 id="statusState" data-i18n="status.unknown">Status unknown</h2>
+          <p class="status-note" id="confText" data-i18n="status.pendingConfirm">Awaiting confirmation</p>
+        </div>
+        <div class="status-card" id="statusCard" hidden>
+          <div class="tx-id-head">
+            <span data-i18n="activity.txid">Transaction ID</span>
+            <button type="button" class="btn text" id="copyTx" data-i18n="action.copy">Copy</button>
+          </div>
+          <p class="mono tx-id" id="statusDetail"></p>
+        </div>
+        <div class="status-actions">
+          <button type="button" class="btn ghost" id="viewTx" hidden data-i18n="status.viewTx">View transaction</button>
+          <button type="button" class="btn ghost" id="bumpConf" hidden data-i18n="action.refresh">Refresh</button>
+          <button type="button" class="btn primary" id="statusHome" data-i18n="status.backHome">Back to home</button>
+        </div>
+      </section>
+
+      <section class="screen activity-screen" id="screen-activity" hidden>
+        <div class="activity-head">
+          <h2 data-i18n="activity.title">Activity</h2>
+        </div>
+        <div id="activityList" class="activity-list"></div>
+      </section>
+
+      <section class="screen tx-screen" id="screen-tx" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-activity" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 id="txTitle" data-i18n="activity.detailTitle">Activity</h2></div>
+        <div class="tx-hero" id="txHero">
+          <i class="tx-hero-mark" id="txMark" aria-hidden="true"></i>
+          <div class="tx-hero-amount">
+            <span class="tx-hero-num" id="txAmount"></span>
+            <span class="tx-hero-unit">PEARL</span>
+          </div>
+        </div>
+        <div class="tx-card">
+          <div class="sum"><span data-i18n="activity.status">Status</span><b id="txState"></b></div>
+          <div class="sum"><span data-i18n="activity.time">Time</span><b id="txWhen"></b></div>
+          <div class="tx-id-block">
+            <div class="tx-id-head">
+              <span data-i18n="activity.txid">Transaction ID</span>
+              <button type="button" class="btn text" id="copyTxDetail" data-i18n="action.copy">Copy</button>
+            </div>
+            <p class="mono tx-id" id="txId"></p>
+            <button type="button" class="status-link" id="viewTxDetail" hidden data-i18n="status.viewTx">View transaction</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen settings-screen" id="screen-settings" hidden>
+        <header class="settings-hero">
+          <img class="settings-pearl" src="icons/pearl.png" width="40" height="40" alt="" aria-hidden="true">
+          <div class="settings-hero-copy">
+            <h2 data-i18n="settings.title">Settings</h2>
+            <p class="settings-meta">
+              <span class="settings-chip" id="settingsNetBadge" data-i18n="net.mainnet">Mainnet</span>
+              <span class="settings-chip quiet">Pearla 1.0.0</span>
+            </p>
+          </div>
+        </header>
+
+        <section class="settings-block">
+          <h3 data-i18n="settings.security">Security</h3>
+          <div class="rows settings-card">
+            <button type="button" class="rowlink" id="viewSeed">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 7h8M8 12h8M8 17h5M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.viewSeed">View recovery phrase</b></span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button type="button" class="rowlink" id="openPw">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.changePassword">Change password</b></span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button type="button" class="rowlink" id="openIdle">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.autoLock">Auto-lock</b></span>
+              <span class="row-value" id="idleValue" data-i18n="idle.value">5 min</span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-block">
+          <h3 data-i18n="settings.wallet">Wallet</h3>
+          <div class="rows settings-card">
+            <button type="button" class="rowlink" id="openRename">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20h4l10-10-4-4L4 16v4zM14 6l4 4"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.accountName">Account name</b></span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button type="button" class="rowlink" id="openNet">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.network">Network</b></span>
+              <span class="row-value" id="netRowHint" data-i18n="net.mainnet">Mainnet</span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-block">
+          <h3 data-i18n="settings.preferences">Preferences</h3>
+          <div class="rows settings-card">
+            <div class="rowlink" id="langRow" role="group" data-i18n-aria-label="settings.languageGroup">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2c1.5 2.4 2.4 5.1 2.5 8H9.5c.1-2.9.9-5.6 2.5-8zm-6.2 8h3.4c.1 1.4.4 2.8.9 4.1A8 8 0 0 1 5.8 12zm4.3 4.1c.5-1.3.8-2.7.9-4.1h4c.1 1.4.4 2.8.9 4.1a8 8 0 0 1-4 0zm5.2-4.1h3.4a8 8 0 0 1-2.7 4.1c.5-1.3.8-2.7.9-4.1z"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.language">Language</b></span>
+              <div class="lang-switch" id="langSwitch">
+                <button type="button" data-locale="en" id="langEn" data-i18n="lang.english">English</button>
+                <button type="button" data-locale="zh" id="langZh" data-i18n="lang.chinese">中文</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-block">
+          <h3 data-i18n="settings.about">About</h3>
+          <div class="rows settings-card">
+            <button type="button" class="rowlink" id="openPrivacy">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 5 3.5 8.5 7 9 3.5-.5 7-4 7-9V6l-7-3z"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.privacy">Privacy</b></span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button type="button" class="rowlink" id="openDonate">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s-7-4.5-7-10a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 5.5-7 10-7 10z"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.supportPearla">Support Pearla</b></span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button type="button" class="rowlink" id="openSite" data-i18n-aria-label="settings.websiteAria" aria-label="Official site — opens pearla.net in a new tab">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.website">Website</b></span>
+              <span class="row-value">pearla.net</span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button type="button" class="rowlink" id="openSource" data-i18n-aria-label="settings.sourceAria" aria-label="Source — opens GitHub in a new tab">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 4h6l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v4h4V6H10zm-3 8h10v2H7v-2zm0 4h7v2H7v-2z"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.source">Source code</b></span>
+              <span class="row-value">GitHub</span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-block danger">
+          <button type="button" class="settings-danger" id="removeVault">
+            <span class="row-label" data-i18n="settings.removeVault">Delete current wallet</span>
+          </button>
+        </section>
+      </section>
+
+      <section class="screen" id="screen-pwchange" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="pwchange.title">Change password</h2></div>
+        <label for="oldPw" data-i18n="pwchange.current">Current password</label>
+        <input id="oldPw" type="password" autocomplete="current-password">
+        <label for="newPw" data-i18n="pwchange.new">New password</label>
+        <input id="newPw" type="password" autocomplete="new-password" data-i18n-placeholder="password.placeholderMin" placeholder="At least 8 characters">
+        <label for="newPw2" data-i18n="pwchange.confirm">Enter again</label>
+        <input id="newPw2" type="password" autocomplete="new-password" data-i18n-placeholder="pwchange.confirmPlaceholder" placeholder="Type again">
+        <p class="hint bad" role="alert" id="pwChangeError"></p>
+        <button type="button" class="btn primary docked" id="changePw" data-i18n="pwchange.save">Save new password</button>
+      </section>
+
+      <section class="screen" id="screen-idle" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="idle.title">Auto-lock</h2></div>
+        <p class="sub" data-i18n="idle.sub">Lock after a period of inactivity. Tap a choice to save; takes effect next time you open the wallet.</p>
+
+        <div class="net-list" id="idlePresetList" role="radiogroup" data-i18n-aria-label="idle.durationGroup" aria-label="Lock duration">
+          <button type="button" class="net-option" data-idle="1" aria-checked="false">
+            <span class="net-option-main">
+              <b data-i18n="idle.min1">1 minute</b>
+              <small data-i18n="idle.min1Hint">Lock even for short breaks</small>
+            </span>
+            <span class="net-option-mark" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="net-option" data-idle="5" aria-checked="true">
+            <span class="net-option-main">
+              <b data-i18n="idle.min5">5 minutes</b>
+              <small data-i18n="idle.min5Hint">Default</small>
+            </span>
+            <span class="net-option-mark" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="net-option" data-idle="15" aria-checked="false">
+            <span class="net-option-main">
+              <b data-i18n="idle.min15">15 minutes</b>
+              <small data-i18n="idle.min15Hint">Longer session</small>
+            </span>
+            <span class="net-option-mark" aria-hidden="true"></span>
+          </button>
+        </div>
+
+        <h3 class="net-section-title" data-i18n="idle.customSection">Custom</h3>
+        <button type="button" class="net-option" id="idleCustomSummary" data-idle-custom="1" aria-checked="false" hidden>
+          <span class="net-option-main">
+            <b id="idleCustomTitle" data-i18n="idle.customTitle">Custom duration</b>
+            <small id="idleCustomHost"></small>
+          </span>
+          <span class="net-option-mark" aria-hidden="true"></span>
+        </button>
+        <button type="button" class="net-add" id="idleCustomToggle" data-i18n="idle.customMinutes">Custom minutes</button>
+
+        <div class="net-custom-panel" id="idleCustomFields" hidden>
+          <label for="idleCustomMin" data-i18n="idle.minutesLabel">Minutes</label>
+          <input id="idleCustomMin" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" data-i18n-placeholder="idle.minutesPlaceholder" placeholder="1–120">
+          <button type="button" class="btn primary" id="saveIdleCustom" data-i18n="action.save">Save</button>
+        </div>
+        <p class="hint" id="idleNote"></p>
+        <p class="hint bad" role="alert" id="idleError"></p>
+      </section>
+
+      <section class="screen" id="screen-network" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="network.title">Network</h2></div>
+        <p class="sub" data-i18n="network.sub">Tap to switch. Mainnet and testnet addresses differ; custom indexers need an address network before saving.</p>
+
+        <div class="net-list" id="netPresetList" role="radiogroup" data-i18n-aria-label="network.presetGroup" aria-label="Preset networks">
+          <button type="button" class="net-option" data-profile="mainnet" aria-checked="true">
+            <span class="net-option-main">
+              <b data-i18n="net.mainnet">Mainnet</b>
+              <small>blockbook.pearlresearch.ai</small>
+            </span>
+            <span class="net-option-mark" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="net-option" data-profile="testnet" aria-checked="false">
+            <span class="net-option-main">
+              <b data-i18n="net.testnet">Testnet</b>
+              <small>blockbook.testnet.pearlresearch.ai</small>
+            </span>
+            <span class="net-option-mark" aria-hidden="true"></span>
+          </button>
+        </div>
+
+        <h3 class="net-section-title" data-i18n="network.customSection">Custom</h3>
+        <button type="button" class="net-option" id="netCustomSummary" data-profile="custom" aria-checked="false" hidden>
+          <span class="net-option-main">
+            <b id="netCustomTitle" data-i18n="network.customTitle">Custom network</b>
+            <small id="netCustomHost"></small>
+          </span>
+          <span class="net-option-mark" aria-hidden="true"></span>
+        </button>
+        <button type="button" class="net-add" id="netCustomToggle" data-i18n="network.addCustom">Add custom network</button>
+
+        <div class="net-custom-panel" id="netCustomFields" hidden>
+          <label data-i18n="network.addrNetworkLabel">Address network</label>
+          <div class="choices" id="netCustomChainChoices" role="radiogroup" data-i18n-aria-label="network.addrNetworkGroup" aria-label="Custom address network">
+            <button type="button" data-net="Pearl mainnet" aria-checked="true" data-i18n="net.mainnet">Mainnet</button>
+            <button type="button" data-net="Pearl testnet" aria-checked="false" data-i18n="net.testnet">Testnet</button>
+          </div>
+          <label data-i18n="network.schemeLabel">Protocol</label>
+          <div class="choices" id="netSchemeChoices" role="radiogroup" data-i18n-aria-label="network.schemeGroup" aria-label="Protocol">
+            <button type="button" data-scheme="https" aria-checked="true">https</button>
+            <button type="button" data-scheme="http" aria-checked="false">http</button>
+          </div>
+          <p class="hint" id="netHttpHint" hidden></p>
+          <label for="netHost" data-i18n="network.hostLabel">Host</label>
+          <input id="netHost" type="text" autocomplete="off" spellcheck="false" data-i18n-placeholder="network.hostPlaceholder" placeholder="e.g. 127.0.0.1">
+          <label for="netPort" data-i18n="network.portLabel">Port</label>
+          <input id="netPort" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" data-i18n-placeholder="network.portPlaceholder" placeholder="Optional">
+          <button type="button" class="btn primary" id="saveNetwork" data-i18n="network.saveSwitch">Save and switch</button>
+        </div>
+        <p class="hint bad" role="alert" id="netError"></p>
+      </section>
+
+      <section class="screen" id="screen-privacy" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="privacy.title">Privacy</h2></div>
+        <p class="sub" data-i18n="privacy.p1">This is Pearla. Public privacy policy: pearla.net/privacy.</p>
+        <p class="sub" data-i18n="privacy.p2">Recovery phrases, seeds, private keys, and passwords stay on this device, encrypted locally. Sessions only store unlock expiry.</p>
+        <p class="sub" data-i18n="privacy.p3">Address queries, fee rates, and signed transactions you approve are sent only to the indexer you chose under Network (default blockbook.pearlresearch.ai). Passwords and recovery phrases are not included.</p>
+        <p class="sub" data-i18n="privacy.p4">Home USD totals try Coinbase PEARL-USD first, then CoinGecko on failure; those requests do not include addresses, balances, or keys.</p>
+        <p class="sub" data-i18n="privacy.p5">We do not read browsing history or inject APIs into web pages.</p>
+      </section>
+
+      <section class="screen" id="screen-donate" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="donate.title">Support Pearla</h2></div>
+        <p class="sub" id="donateBlurb" data-i18n="donate.blurb">Voluntary donations support Pearla maintenance. An address is provided to copy only — no automatic transfers and no send screen.</p>
+        <div class="summary donate-card">
+          <div class="sum stack"><span data-i18n="donate.mainnetAddress">Mainnet receive address</span><b class="mono" id="donateAddress"></b></div>
+        </div>
+        <p class="hint" id="donateHint" data-i18n="donate.hint">After copying, paste on the send screen yourself and verify the address.</p>
+        <button type="button" class="btn primary" id="copyDonate" data-i18n="donate.copy">Copy address</button>
+      </section>
+
+      <section class="screen" id="screen-rename" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="rename.title">Account name</h2></div>
+        <label for="renameInput" data-i18n="rename.current">Current account</label>
+        <input id="renameInput" maxlength="24">
+        <button type="button" class="btn primary" id="renameAccount" data-i18n="rename.save">Save name</button>
+      </section>
+
+      <section class="screen secret-screen" id="screen-secret" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="secret.title">Recovery phrase</h2></div>
+        <div class="secret-card" id="seedGate">
+          <div class="secret-banner" aria-hidden="true">
+            <span class="row-ico"><svg viewBox="0 0 24 24"><path d="M8 7h8M8 12h8M8 17h5M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg></span>
+            <div>
+              <strong data-i18n="secret.gateTitle">Confirm device password again</strong>
+              <p data-i18n="secret.gateBody">The phrase is shown only on this device and is never uploaded.</p>
+            </div>
+          </div>
+          <label for="seedPw" data-i18n="secret.devicePassword">Device password</label>
+          <input id="seedPw" type="password" autocomplete="current-password" data-i18n-placeholder="lock.placeholder" placeholder="Enter password" data-i18n-aria-label="lock.passwordAria" aria-label="Password">
+          <p class="hint bad" role="alert" id="seedError"></p>
+          <button type="button" class="btn primary docked" id="seedUnlock" data-i18n="secret.verifyContinue">Verify and continue</button>
+          <p class="hint" data-i18n="secret.afterShowHint">Do not screenshot; leave this screen when done.</p>
+        </div>
+        <div class="secret-card" id="seedPanel" hidden>
+          <div class="secret-banner warn" aria-hidden="true">
+            <span class="row-ico warn"><svg viewBox="0 0 24 24"><path d="M12 8v5M12 16.5h.01M12 3 2.5 20h19L12 3z"/></svg></span>
+            <div>
+              <strong data-i18n="secret.warnTitle">Recovery phrase will be shown</strong>
+              <p data-i18n="secret.warnBody">Keep others from viewing. Do not screenshot or photograph.</p>
+            </div>
+          </div>
+          <button type="button" class="btn primary" id="seedReveal" data-i18n="secret.reveal">Tap to show recovery phrase</button>
+          <div class="words" id="seedGrid" hidden></div>
+          <p class="hint" data-i18n="secret.clearedOnLeave">Display is cleared when you leave this page.</p>
+        </div>
+      </section>
+    </div>
+    <nav class="nav" id="bottomNav" hidden>
+      <button type="button" data-tab="screen-home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V20H15v-5H9v5H4z"/></svg><span data-i18n="nav.assets">Assets</span></button>
+      <button type="button" data-tab="screen-activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h10"/></svg><span data-i18n="nav.activity">Activity</span></button>
+      <button type="button" data-tab="screen-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16M9 6v4M15 14v4"/></svg><span data-i18n="nav.settings">Settings</span></button>
+    </nav>
+    <div class="scrim" id="accountScrim" hidden></div>
+    <dialog class="drawer" id="accountSheet" hidden>
+      <div class="grab" aria-hidden="true"></div>
+      <div class="head"><h2 data-i18n="accounts.title">Accounts</h2><button type="button" class="icon" id="closeAccounts" data-i18n-aria-label="action.close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
+      <div id="accountList"></div>
+      <div class="acct-actions">
+        <button type="button" class="btn ghost" id="addDerived" data-i18n="accounts.add">Add account</button>
+        <button type="button" class="btn ghost" id="addMenuWatch" data-i18n="accounts.addWatch">Watch-only wallet</button>
+        <p class="hint" data-i18n="accounts.addHint">“Add account” derives another under the same phrase without replacing wallets. “Watch-only” tracks one address; balance excludes change and other addresses.</p>
+      </div>
+    </dialog>
+    <div class="sheet-screen" id="screen-add-account" hidden>
+      <div class="sheet-card">
+        <div class="head"><button type="button" class="icon" id="closeAddAccount" data-i18n-aria-label="action.close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button><h2 data-i18n="addAccount.title">Add account</h2></div>
+        <p class="sub" id="addAccountWarn" data-i18n="addAccount.warn">The previous account has no on-chain activity yet. You can still add one, but if the new account never receives funds, recovery elsewhere may not find this empty account; it remains in the local list.</p>
+        <div class="field-row sheet-actions">
+          <button type="button" class="btn ghost" id="cancelAddAccount" data-i18n="action.cancel">Cancel</button>
+          <button type="button" class="btn primary" id="confirmAddAccount" data-i18n="accounts.addContinue">Continue adding</button>
+        </div>
+      </div>
+    </div>
+    <div class="sheet-screen" id="screen-unlock" hidden>
+      <div class="sheet-card">
+        <div class="head"><button type="button" class="icon" id="closeUnlock" data-i18n-aria-label="action.close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button><h2 data-i18n="unlock.title">Enter password</h2></div>
+        <label for="unlockPw" data-i18n="unlock.password">Password</label>
+        <input id="unlockPw" type="password" autocomplete="current-password" data-i18n-placeholder="unlock.placeholder" placeholder="Password">
+        <p class="hint bad" role="alert" id="unlockError"></p>
+        <button type="button" class="btn primary" id="signBtn" data-i18n="unlock.signSend">Sign and send</button>
+      </div>
+    </div>
+    <div class="sheet-screen" id="screen-account-pw" hidden>
+      <div class="sheet-card">
+        <div class="head"><button type="button" class="icon" id="closeAccountPw" data-i18n-aria-label="action.close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button><h2 data-i18n="accountPw.title">Enter password</h2></div>
+        <label for="sheetPw" data-i18n="accountPw.password">Password</label>
+        <input id="sheetPw" type="password" autocomplete="current-password" data-i18n-placeholder="accountPw.placeholder" placeholder="Unlock password">
+        <p class="hint bad" role="alert" id="sheetPwError"></p>
+        <button type="button" class="btn primary" id="sheetPwNext" data-i18n="action.continue">Continue</button>
+      </div>
+    </div>
+    <div class="sheet-screen" id="screen-remove" hidden>
+      <div class="sheet-card">
+        <div class="head"><button type="button" class="icon" id="closeRemove" data-i18n-aria-label="action.close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button><h2 data-i18n="settings.removeTitle">Delete current wallet</h2></div>
+        <p class="sub" data-i18n="settings.removeWarn">This removes the encrypted wallet from this browser. It cannot be undone. You will need your recovery phrase to restore it.</p>
+        <label for="removePw" data-i18n="settings.removePassword">Password</label>
+        <input id="removePw" type="password" autocomplete="current-password" data-i18n-placeholder="lock.placeholder" placeholder="Enter password">
+        <p class="hint bad" role="alert" id="removeError"></p>
+        <div class="field-row sheet-actions">
+          <button type="button" class="btn ghost" id="cancelRemove" data-i18n="action.cancel">Cancel</button>
+          <button type="button" class="btn primary" id="confirmRemove" data-i18n="settings.removeAction">Delete wallet</button>
+        </div>
+      </div>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

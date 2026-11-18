@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pearl simnet 固定夹具测试</title><link rel="stylesheet" href="popup.css"><link rel="stylesheet" href="simnet.css"><script src="simnet.js" defer></script></head>
+<body>
+  <main>
+    <h1>Pearl simnet · 本地测试</h1>
+    <p class="callout">社区版开发测试包。只使用固定公开种子和本次新挖的本地测试币；不能导入钱包，也不能连接主网。</p>
+    <p class="fine">先启动项目本地桥接，读取它生成的 pairing.json。可将本页作为独立扩展页面打开，配对和签名不会保存配对码。失焦、隐藏或关闭会断开；发送中的交易重开后须重新配对查证。</p>
+    <div class="field"><label for="simnet-pair">本次桥接配对码</label><input id="simnet-pair" type="password" autocomplete="off" spellcheck="false"></div>
+    <button type="button" class="primary-btn" id="simnet-connect">配对并读取固定草稿</button>
+    <button type="button" class="text-btn" id="simnet-disconnect">断开并清除本页数据</button>
+    <p id="simnet-error" class="hint is-error" role="alert"></p>
+    <p id="simnet-status" class="hint" role="status">未连接</p>
+    <section id="simnet-review" hidden>
+      <pre id="simnet-summary"></pre>
+      <label class="check-row"><input id="simnet-sign-confirm" type="checkbox">已核对网络、收款、金额、手续费和找零</label>
+      <button type="button" class="primary-btn" id="simnet-sign">签名固定测试交易</button>
+      <label class="check-row"><input id="simnet-send-confirm" type="checkbox">确认向本地 simnet 广播此交易</label>
+      <button type="button" class="primary-btn" id="simnet-send">广播本地测试交易</button>
+      <button type="button" class="text-btn" id="simnet-refresh">仅查证交易状态</button>
+    </section>
+  </main>
+</body>
+</html>
