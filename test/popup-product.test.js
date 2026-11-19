@@ -664,3 +664,119 @@ test("a wallet-less welcome screen can switch networks and come back", async () 
   assert.equal(document.getElementById("screen-welcome").hidden, false);
   assert.equal(document.getElementById("welcomeNetLabel").textContent, "Mainnet");
 });
+
+test("home paints balance before a slow gap rescan finishes", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let releaseScan;
+  const scanGate = new Promise((resolve) => { releaseScan = resolve; });
+  let unlocked = true;
+  const app = mount(document, {
+    vault: {
+      get status() { return { exists: true, unlocked, ready: true }; },
+      async init() {},
+      async address(branch, index) {
+        if (branch === 0 && index === 0) return ADDRESS;
+        if (branch === 1 && index === 0) return CHANGE;
+        return `${ADDRESS}-${branch}-${index}`;
+      },
+      subscribe() { return () => {}; },
+    },
+    storage: {
+      async getVault() { return { version: 2 }; },
+      async getBook() {
+        return {
+          current: "d0",
+          items: [{
+            id: "d0", name: "Account 1", kind: "derived", account: 0,
+            address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+          }],
+        };
+      },
+      async setBook() {},
+      async getMeta() { return null; },
+      async setMeta() {},
+      async getIdle() { return null; },
+    },
+    async fetchAddress(address) {
+      if (address !== ADDRESS && address !== CHANGE) await scanGate;
+      if (address === ADDRESS) {
+        return {
+          balance: 250000000n,
+          activity: [{
+            txid: "33".repeat(32), direction: "in", amount: 250000000n, confirmations: 1, time: 1_700_000_100,
+          }],
+        };
+      }
+      return { balance: 0n, activity: [], txCount: 0 };
+    },
+  });
+  // ready awaits the full gap rescan; assert the early balance paint before releasing it.
+  await until(() => document.getElementById("homeBalance").textContent === "2.5");
+  assert.equal(document.getElementById("homeBalance").textContent, "2.5");
+  assert.equal(document.getElementById("balanceCard").classList.contains("soft-refresh"), true);
+  releaseScan();
+  await app.ready;
+  await until(() => document.getElementById("balanceCard").classList.contains("soft-refresh") === false);
+  assert.equal(document.getElementById("homeBalance").textContent, "2.5");
+});
+
+test("home network chip opens the network screen and returns to home", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const TESTNET_RECV = "tprl1pc8du0xq0z0gr3ft7eaqpdtztkjf9gzmjy3qmxxlgaymtxa0dcumq7wunsu";
+  const TESTNET_CHANGE = "tprl1p6nun4sakj570adkpl48szzw22pywy7f3h52dc42uqgx29m6rl2nqmv5hgc";
+  let unlocked = true;
+  let saved = null;
+  let networkId = "Pearl mainnet";
+  const app = mount(document, {
+    vault: {
+      get status() { return { exists: true, unlocked, ready: true }; },
+      async init() {},
+      async address(branch, index) {
+        const receive = networkId === "Pearl testnet" ? TESTNET_RECV : ADDRESS;
+        const change = networkId === "Pearl testnet" ? TESTNET_CHANGE : CHANGE;
+        if (branch === 0 && index === 0) return receive;
+        if (branch === 1 && index === 0) return change;
+        return `${receive}-${branch}-${index}`;
+      },
+      async switchNetwork() {},
+      subscribe() { return () => {}; },
+    },
+    storage: {
+      async getVault() { return { version: 2 }; },
+      async getBook() {
+        return {
+          current: "d0",
+          items: [{
+            id: "d0", name: "Account 1", kind: "derived", account: 0,
+            address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+          }],
+        };
+      },
+      async setBook() {},
+      async getMeta() { return { homeScan: { d0: [ADDRESS] }, cursors: { d0: { receiveNext: 0, changeNext: 0 } } }; },
+      async setMeta() {},
+      async getIdle() { return null; },
+    },
+    async fetchAddress() { return { balance: 0n, activity: [] }; },
+    networkPrefs: { networkId: "Pearl mainnet", indexerMode: "default" },
+    async applyNetworkPrefs(draft) {
+      saved = draft;
+      networkId = draft.networkId;
+      return draft;
+    },
+  });
+  await app.ready;
+  await until(() => document.getElementById("screen-home").hidden === false);
+  assert.equal(document.getElementById("netDotLabel").textContent, "Mainnet");
+  document.getElementById("netDot").click();
+  assert.equal(document.getElementById("screen-network").hidden, false);
+  assert.equal(document.querySelector("#screen-network [data-back]").dataset.back, "screen-home");
+  document.querySelector("#screen-network [data-back]").click();
+  await until(() => document.getElementById("screen-home").hidden === false);
+  document.getElementById("netDot").click();
+  document.querySelector('#netPresetList [data-profile="testnet"]').click();
+  await until(() => saved?.networkId === "Pearl testnet" && document.getElementById("screen-home").hidden === false);
+  assert.equal(saved.networkId, "Pearl testnet");
+  assert.equal(document.getElementById("screen-home").hidden, false);
+  assert.equal(document.getElementById("netDotLabel").textContent, "Testnet");
+});

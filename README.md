@@ -4,6 +4,8 @@ English | [中文](README.zh.md)
 
 Pearla is a community-edition Pearl wallet extension for Chrome. Secure, open source, simple, and free.
 
+Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/pearla/malecdccgdfbifciokeicccacfjbodcn).
+
 ## What it does
 
 - Create a 12-word or 24-word wallet, or import an English recovery phrase or a hexadecimal seed

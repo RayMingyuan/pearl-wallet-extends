@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Pearla",
+  "name": "Pearla - A Pearl Wallet",
   "version": "1.0.0",
   "minimum_chrome_version": "113",
   "description": "Pearla — a community-edition Pearl wallet for Chrome. Secure, simple, open source, and free.",
   "action": {
-    "default_title": "Pearla",
+    "default_title": "Pearla - A Pearl Wallet",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
