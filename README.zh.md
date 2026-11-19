@@ -4,6 +4,8 @@
 
 Pearla 是 Pearl 的社区版 Chrome 钱包扩展，安全、开源、简洁、免费。
 
+从 [Chrome 应用商店](https://chromewebstore.google.com/detail/pearla/malecdccgdfbifciokeicccacfjbodcn) 安装。
+
 ## 能做什么
 
 - 创建 12 词或 24 词钱包，或导入英文助记词、十六进制种子

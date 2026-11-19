@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { addressLooksUsed } from "../src/account-scan.js";
 import { BlockbookError, fetchWatchAddress, parseAddressPayload } from "../src/blockbook.js";
 import { packMessage, speak } from "../src/i18n.js";
 import { LIVE_ADDRESS, TX_A, tx } from "./samples.js";
@@ -33,6 +34,20 @@ test("parses an explicit zero balance separately from a transport failure", asyn
   assert.equal(zero.unconfirmedBalance, 0n);
   assert.deepEqual(zero.activity, []);
   assert.equal(zero.activityError, null);
+});
+
+test("unused Blockbook addresses without a transactions field stay empty, not corrupt", () => {
+  // Live Blockbook omits `transactions` when txs is 0. Gap scans need that to mean unused.
+  const parsed = parseAddressPayload({
+    balance: "0",
+    unconfirmedBalance: "0",
+    txs: 0,
+  }, LIVE_ADDRESS);
+  assert.equal(parsed.balance, 0n);
+  assert.equal(parsed.txCount, 0);
+  assert.deepEqual(parsed.activity, []);
+  assert.equal(parsed.activityError, null);
+  assert.equal(addressLooksUsed(parsed), false);
 });
 
 test("http, network, and shape failures throw instead of returning zero", async () => {

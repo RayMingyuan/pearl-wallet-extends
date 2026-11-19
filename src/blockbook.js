@@ -56,8 +56,13 @@ export function parseAddressPayload(body, address) {
   } catch {
     throw new BlockbookError(failureMessage("shape"), { kind: "shape" });
   }
-  const interpreted = interpretTransactions(body.transactions, address);
   const txCount = Number.isInteger(body.txs) && body.txs >= 0 ? body.txs : null;
+  // Blockbook omits `transactions` for unused addresses (txs === 0). Treat that as an empty list so gap
+  // scans can mark the address unused instead of aborting the whole receive/change cursor.
+  const transactions = Array.isArray(body.transactions)
+    ? body.transactions
+    : (txCount === 0 ? [] : body.transactions);
+  const interpreted = interpretTransactions(transactions, address);
   return {
     balance,
     unconfirmedBalance,
