@@ -592,7 +592,7 @@ export function mountShell(document, {
     }
     return merged;
   }
-  async function loadWalletSnapshot(item, { refresh = true, extraAddresses = [] } = {}) {
+  async function loadWalletSnapshot(item, { refresh = true, extraAddresses = [], persist = true } = {}) {
     const { entries, addresses } = await resolveWalletCoverage(item, { refresh });
     const scan = [...addresses];
     const seen = new Set(scan);
@@ -623,14 +623,17 @@ export function mountShell(document, {
     const hintAddresses = [item.address, ...scan];
     const rows = presentActivity(await mergeWalletActivity(groups, hintAddresses));
     const receive = (await shownReceiveAddress(item)) || item.address;
-    writeHomeCache(item.id, {
-      balance,
-      rows,
-      activityError,
-      receive,
-      scanAddresses: scan,
-    });
-    await persistScanAddresses(item.id, scan);
+    // Preview paints (gap scan still pending) must not overwrite the durable home cache with a partial total.
+    if (persist) {
+      writeHomeCache(item.id, {
+        balance,
+        rows,
+        activityError,
+        receive,
+        scanAddresses: scan,
+      });
+      await persistScanAddresses(item.id, scan);
+    }
     state.balance = balance;
     state.rows = rows;
     state.activityError = activityError;
@@ -1129,12 +1132,8 @@ export function mountShell(document, {
     if (hint) hint.textContent = short;
     const badge = q("settingsNetBadge");
     if (badge) badge.textContent = short;
-    const dot = q("netDot");
-    if (dot) {
-      const pulse = document.createElement("i");
-      const label = document.createTextNode(short);
-      dot.replaceChildren(pulse, label);
-    }
+    const homeLabel = q("netDotLabel");
+    if (homeLabel) homeLabel.textContent = short;
     const welcomeLabel = q("welcomeNetLabel");
     if (welcomeLabel) welcomeLabel.textContent = short;
   }
@@ -1208,9 +1207,13 @@ export function mountShell(document, {
     } else {
       toast(t("toast.networkSwitched"));
     }
+    const back = q("screen-network").querySelector("[data-back]")?.dataset.back;
     if (!vault.status.exists) {
-      const back = q("screen-network").querySelector("[data-back]")?.dataset.back;
       show(back === "screen-welcome" ? "screen-welcome" : "screen-settings");
+      return;
+    }
+    if (back === "screen-home" && (vault.status.unlocked || currentItem()?.address)) {
+      await openHome();
       return;
     }
     show("screen-settings");
@@ -1363,25 +1366,41 @@ export function mountShell(document, {
       renderActivity(q("homeTx"), [], "screen-home");
     }
     show("screen-home");
-    // Show the cache first and refresh quietly in the background, so opening the page does not flash "loading" every time.
+    // Cache first when present. Balance paints before gap rescan and before the USD quote.
     setHomeSoftRefresh(hasCache);
-    // The quote and the balance load together. Until the quote returns, show only "loading", not "no quote".
-    void refreshPearlUsd();
-    try {
-      const snapshot = await loadWalletSnapshot(item, {
-        refresh: item.kind === "derived" && vault.status.unlocked,
-      });
-      if (reads.signal.aborted || currentItem()?.id !== item.id) return;
+    const derivedRefresh = item.kind === "derived" && vault.status.unlocked;
+    const paintHomeSnapshot = (snapshot) => {
       q("switchAddr").textContent = shortAddr(snapshot.receive);
       q("homeAddr").textContent = snapshot.receive;
       paintBalance();
       q("availLine").textContent = t("home.avail", { amount: pretty(snapshot.balance) });
       renderActivity(q("homeTx"), snapshot.rows.slice(0, 4), "screen-home");
+    };
+    try {
+      // Cold open: known receive/change addresses only, so the PEARL total appears before a full gap scan.
+      // When a gap rescan will follow, skip persisting the preview so a mid-scan close cannot leave a partial total.
+      if (!hasCache) {
+        const quick = await loadWalletSnapshot(item, { refresh: false, persist: !derivedRefresh });
+        if (reads.signal.aborted || currentItem()?.id !== item.id) return;
+        paintHomeSnapshot(quick);
+        setHomeSoftRefresh(derivedRefresh);
+      }
+      // Quote after balance is on screen; fiat stays on "loading" until the spot returns.
+      void refreshPearlUsd();
+      if (derivedRefresh) {
+        const snapshot = await loadWalletSnapshot(item, { refresh: true });
+        if (reads.signal.aborted || currentItem()?.id !== item.id) return;
+        paintHomeSnapshot(snapshot);
+      } else if (hasCache) {
+        const snapshot = await loadWalletSnapshot(item, { refresh: false });
+        if (reads.signal.aborted || currentItem()?.id !== item.id) return;
+        paintHomeSnapshot(snapshot);
+      }
       setHomeSoftRefresh(false);
     } catch (error) {
       setHomeSoftRefresh(false);
       if (error?.name === "AbortError" || reads.signal.aborted) return;
-      if (hasCache) {
+      if (hasCache || state.balance != null) {
         toast(speak(error) || t("toast.refreshFailBalance"));
         return;
       }
@@ -2213,10 +2232,15 @@ export function mountShell(document, {
   async function addressWasUsed(branch, index, account) {
     if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
     const snap = await readAddress(await vault.address(branch, index, account));
-    if (snap.activityError && !(Number.isInteger(snap.txCount) && snap.txCount > 0)) {
-      throw new Error(snap.activityError);
+    if (addressLooksUsed(snap)) return true;
+    // Empty addresses may still carry activityError when history JSON is missing. A zero balance and
+    // zero tx count means unused — throwing here used to freeze changeIndex at 0 after import.
+    if (snap.activityError) {
+      const emptyBalance = snap.balance == null || snap.balance === 0n || snap.balance === 0 || snap.balance === "0";
+      const emptyTxs = !Number.isInteger(snap.txCount) || snap.txCount === 0;
+      if (!(emptyBalance && emptyTxs)) throw new Error(snap.activityError);
     }
-    return addressLooksUsed(snap);
+    return false;
   }
   async function shownReceiveAddress(item) {
     if (!item) return "";
@@ -2689,6 +2713,7 @@ export function mountShell(document, {
   });
   q("openNet").addEventListener("click", () => openNetwork("screen-settings"));
   q("welcomeNet").addEventListener("click", () => openNetwork("screen-welcome"));
+  q("netDot").addEventListener("click", () => openNetwork("screen-home"));
   q("openPrivacy").addEventListener("click", () => show("screen-privacy"));
   q("openDonate").addEventListener("click", () => {
     paintDonateScreen();

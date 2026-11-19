@@ -67,7 +67,7 @@ test("built extension is MV3 with a fixed host and strict CSP", () => {
   assert.equal(csp.includes("http:"), false);
   assert.equal(csp.includes("https:"), false);
   assert.equal(manifest.action.default_popup, "popup.html");
-  assert.equal(manifest.name, "Pearla");
+  assert.equal(manifest.name, "Pearla - A Pearl Wallet");
   assert.equal(manifest.description.includes("单地址"), false);
   assert.equal(manifest.description.includes("测试交易"), false);
   assert.match(manifest.description, /Pearla/);

@@ -13,7 +13,8 @@ test("popup announces field errors and keeps hidden screens out of layout", () =
   assert.equal(html.includes('id="boot-state" role="alert"'), false);
   assert.match(css, /\.screen\[hidden\] \{ content-visibility: hidden; \}/);
   assert.match(css, /aria-invalid="true"/);
-  assert.match(html, /id="netDot"[^>]*>[\s\S]*Mainnet/);
+  assert.match(html, /id="netDot"[^>]*aria-label="Network"/);
+  assert.match(html, /id="netDotLabel"[^>]*>Mainnet/);
   assert.match(html, /id="openPrivacy"/);
   assert.match(html, /id="openDonate"/);
   assert.match(html, /id="openSite"/);

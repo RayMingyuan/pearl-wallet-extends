@@ -83,7 +83,8 @@ h3 { margin: 16px 0 8px; font-size: 13px; color: var(--muted); font-weight: 650;
   align-items: center;
   min-height: 40px;
 }
-button.welcome-net {
+button.welcome-net,
+button.top-net {
   width: auto;
   min-height: 32px;
   margin: 0;
@@ -95,8 +96,10 @@ button.welcome-net {
   font-size: 12px;
   font-weight: 700;
 }
-button.welcome-net svg { width: 14px; height: 14px; }
-button.welcome-net:hover { color: var(--gold); border-color: #d4af3780; }
+button.welcome-net svg,
+button.top-net svg { width: 14px; height: 14px; }
+button.welcome-net:hover,
+button.top-net:hover { color: var(--gold); border-color: #d4af3780; }
 .welcome-hero {
   flex: 1;
   display: flex;
