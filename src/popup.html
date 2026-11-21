@@ -206,8 +206,23 @@
         <div class="head"><button type="button" class="icon" data-back="screen-home" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="receive.title">Receive</h2></div>
         <div class="qr-card"><canvas id="qr-canvas" width="220" height="220"></canvas></div>
         <p class="hint bad" role="alert" id="qr-error"></p>
-        <p class="k" data-i18n="receive.addressLabel">Receive address</p>
+        <div class="recv-label-row">
+          <p class="k" data-i18n="receive.addressLabel">Receive address</p>
+          <div class="recv-tools" id="recvTools" hidden>
+            <button type="button" class="icon" id="newRecv" data-i18n-title="receive.newAddressTitle" data-i18n-aria-label="receive.newAddressAria" title="Quick new address" aria-label="Quick new address from local cache">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 10-14h-7l1-6z"/></svg>
+            </button>
+            <button type="button" class="icon quiet" id="newRecvScan" data-i18n-title="receive.newAddressScanTitle" data-i18n-aria-label="receive.newAddressScanAria" title="Scan chain for unused address" aria-label="Scan chain for an unused address">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12.5v.5M4 19h16"/></svg>
+            </button>
+            <button type="button" class="icon quiet" id="pickRecv" data-i18n-title="receive.pickAddressTitle" data-i18n-aria-label="receive.pickAddressAria" title="Choose an existing address" aria-label="Choose an existing receive address">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+            </button>
+          </div>
+        </div>
         <div class="segs" id="recvAddr"></div>
+        <p class="hint" id="recvTempHint" hidden data-i18n="receive.tempHintLocal">Temporary from local cache — home still shows your first address.</p>
+        <p class="hint" id="recvScanHint" hidden data-i18n="receive.scanning">Looking up an unused address…</p>
         <button type="button" class="btn ghost" id="copyRecv" data-i18n="receive.copy">Copy address</button>
       </section>
 
@@ -235,10 +250,11 @@
 
           <p class="k send-fee-label" data-i18n="send.networkFee">Network fee</p>
           <div class="fees fees-compact">
-            <button type="button" class="fee" id="fee-slow" data-fee="slow"><b data-i18n="send.fee.slow">Slow</b><small data-fee-rate>—</small><small data-fee-est>—</small><small data-i18n="send.fee.etaSlow">~1 hour</small></button>
-            <button type="button" class="fee" id="fee-standard" data-fee="standard" aria-checked="true"><b data-i18n="send.fee.standard">Standard</b><small data-fee-rate>—</small><small data-fee-est>—</small><small data-i18n="send.fee.etaStandard">~20 min</small></button>
-            <button type="button" class="fee" id="fee-fast" data-fee="fast"><b data-i18n="send.fee.fast">Fast</b><small data-fee-rate>—</small><small data-fee-est>—</small><small data-i18n="send.fee.etaFast">~6 min</small></button>
+            <button type="button" class="fee" id="fee-slow" data-fee="slow"><b data-i18n="send.fee.slow">Slow</b><small data-i18n="send.fee.etaSlow">~25 blocks</small></button>
+            <button type="button" class="fee" id="fee-standard" data-fee="standard"><b data-i18n="send.fee.standard">Standard</b><small data-i18n="send.fee.etaStandard">~10 blocks</small></button>
+            <button type="button" class="fee" id="fee-fast" data-fee="fast" aria-checked="true"><b data-i18n="send.fee.fast">Fast</b><small data-i18n="send.fee.etaFast">~1 block</small></button>
           </div>
+          <p class="fee-selected" id="feeSelected" aria-live="polite"></p>
           <p class="sub fee-note" id="feeNote"></p>
           <details class="advanced" id="feeCustom">
             <summary id="customFee"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span data-i18n="send.customFee">Custom fee rate</span></summary>
@@ -367,6 +383,16 @@
             <button type="button" class="rowlink" id="openRename">
               <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20h4l10-10-4-4L4 16v4zM14 6l4 4"/></svg></span>
               <span class="row-copy"><b data-i18n="settings.accountName">Account name</b></span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button type="button" class="rowlink" id="openAddresses">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.receiveAddresses">Receive addresses</b></span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button type="button" class="rowlink" id="openStructure">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M5 8h14M5 16h14M8 8v8M16 8v8"/></svg></span>
+              <span class="row-copy"><b data-i18n="settings.accountStructure">Account structure</b></span>
               <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
             </button>
             <button type="button" class="rowlink" id="openNet">
@@ -564,6 +590,30 @@
         <button type="button" class="btn primary" id="renameAccount" data-i18n="rename.save">Save name</button>
       </section>
 
+      <section class="screen" id="screen-addresses" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="addresses.title">Receive addresses</h2></div>
+        <p class="sub" data-i18n="addresses.sub">Known receive addresses for this account. Home always uses the first address; others can be copied here or chosen temporarily on Receive.</p>
+        <div class="addr-manage-list" id="addressManageList"></div>
+        <p class="hint" id="addressManageEmpty" hidden data-i18n="addresses.empty">No receive addresses to show yet.</p>
+      </section>
+
+      <section class="screen" id="screen-structure" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="structure.title">Account structure</h2></div>
+        <p class="sub" data-i18n="structure.sub">Read-only view of this account’s receive and change chains. Home still uses the first receive address. Do not share change addresses for payments.</p>
+        <div class="structure-actions">
+          <button type="button" class="btn ghost" id="structureScan" data-i18n="structure.scan">Scan chains for used addresses</button>
+        </div>
+        <p class="hint" id="structureScanHint" hidden data-i18n="structure.scanning">Scanning receive and change chains…</p>
+        <p class="hint bad" role="alert" id="structureError"></p>
+        <h3 class="structure-heading" data-i18n="structure.receiveHeading">Receive</h3>
+        <div class="addr-manage-list" id="structureReceiveList"></div>
+        <p class="hint" id="structureReceiveEmpty" hidden data-i18n="structure.receiveEmpty">No receive addresses in the local cursor yet.</p>
+        <h3 class="structure-heading" data-i18n="structure.changeHeading">Change (internal)</h3>
+        <p class="hint" data-i18n="structure.changeHint">Change addresses hold leftover from sends. Prefer not using them as payment destinations.</p>
+        <div class="addr-manage-list" id="structureChangeList"></div>
+        <p class="hint" id="structureChangeEmpty" hidden data-i18n="structure.changeEmpty">No change addresses in the local cursor yet.</p>
+      </section>
+
       <section class="screen secret-screen" id="screen-secret" hidden>
         <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="secret.title">Recovery phrase</h2></div>
         <div class="secret-card" id="seedGate">
@@ -600,6 +650,13 @@
       <button type="button" data-tab="screen-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16M9 6v4M15 14v4"/></svg><span data-i18n="nav.settings">Settings</span></button>
     </nav>
     <div class="scrim" id="accountScrim" hidden></div>
+    <div class="scrim" id="recvPickScrim" hidden></div>
+    <dialog class="drawer" id="recvPickSheet" hidden>
+      <div class="grab" aria-hidden="true"></div>
+      <div class="head"><h2 data-i18n="receive.pickTitle">Choose address</h2><button type="button" class="icon" id="closeRecvPick" data-i18n-aria-label="action.close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
+      <p class="hint" data-i18n="receive.pickHint">Temporary for this Receive screen only — home still shows your first address.</p>
+      <div id="recvPickList"></div>
+    </dialog>
     <dialog class="drawer" id="accountSheet" hidden>
       <div class="grab" aria-hidden="true"></div>
       <div class="head"><h2 data-i18n="accounts.title">Accounts</h2><button type="button" class="icon" id="closeAccounts" data-i18n-aria-label="action.close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
