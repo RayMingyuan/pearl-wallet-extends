@@ -200,7 +200,7 @@ test("built classic popup encrypts a seed, prepares and signs locally with GET q
       if (check()) return;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    const hint = ["importError", "homeAddr", "homeBalance", "screen-home", "screen-done"].map((id) => {
+    const hint = ["importError", "homeAddr", "homeBalance", "screen-home", "screen-done", "screen-send", "screen-confirm", "sendError", "feeSelected"].map((id) => {
       const el = document.getElementById(id);
       if (!el) return `${id}:missing`;
       return `${id}:${el.hidden ? "hidden" : "shown"}:${el.textContent.slice(0, 80)}`;
@@ -218,18 +218,18 @@ test("built classic popup encrypts a seed, prepares and signs locally with GET q
   document.getElementById("importNext").click();
   await until(() => document.getElementById("screen-done").hidden === false);
   document.getElementById("enterWallet").click();
-  // Once 0/0 has a balance, receive rotates to the next unused address. The home balance still aggregates addresses already found.
-  await until(() => document.getElementById("homeAddr").textContent === fixture.vectors[1].address
+  // Home always shows the first receive address (0/0); balance still aggregates addresses already found.
+  await until(() => document.getElementById("homeAddr").textContent === fixture.vectors[0].address
     && document.getElementById("homeBalance").textContent === "1");
   assert.equal(document.getElementById("importText").value, "");
   assert.equal(JSON.stringify(writes).includes(fixture.seedHex), false);
   assert.equal(JSON.stringify(writes).includes("public-bundled-test-password"), false);
   assert.ok(writes.some((item) => Object.keys(item).join() === "pearlVault"));
   document.getElementById("goSend").click();
-  await until(() => document.getElementById("feeNote").textContent.includes("180 vB")
-    || document.getElementById("fee-standard")?.querySelector("[data-fee-est]")?.textContent.includes("PEARL"));
-  assert.equal(document.querySelector(".fees")?.classList.contains("is-loading"), false);
-  assert.match(document.getElementById("fee-standard")?.querySelector("[data-fee-rate]")?.textContent || "", /grain\/vB/);
+  await until(() => /grain\/vB/.test(document.getElementById("feeSelected")?.textContent || "")
+    && document.querySelector(".fees")?.classList.contains("is-loading") === false);
+  assert.match(document.getElementById("feeSelected").textContent, /grain\/vB/);
+  assert.match(document.getElementById("fee-standard").textContent, /10/);
   assert.equal(document.getElementById("sendPicks"), null);
   document.getElementById("sendTo").value = transaction.request.destination;
   document.getElementById("sendTo").dispatchEvent(new document.defaultView.Event("input", { bubbles: true }));

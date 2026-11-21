@@ -5,6 +5,7 @@ import { parseHTML } from "linkedom";
 import { mountShell } from "../src/shell.js";
 
 const ADDRESS = "prl1psayn40fkp3f3szxztahxwszhyjfxe3u9tqxycujd6q2zcw4uc99sm7r4na";
+const STALE_ADDRESS = "prl1p3g3gq6f2mzke7f2vru90ep9erp9e6sgumrxw8akytd45s2zzctwsacrerl";
 
 test("an already unlocked vault opens home, and a second unlock tap does not show an error", async () => {
   const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
@@ -184,4 +185,95 @@ test("settings can delete current wallet with explicit second click", async () =
   assert.equal(removed, 1);
   assert.equal(document.getElementById("screen-welcome").hidden, false);
   assert.deepEqual(savedBook, { current: "d0", items: [] });
+});
+
+test("home header matches vault receive even when the local book still has a stale 0/0 address", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const previousDocument = globalThis.document;
+  globalThis.document = document;
+  let unlocked = false;
+  let book = {
+    current: "d0",
+    items: [{
+      id: "d0",
+      name: "Account 1",
+      kind: "derived",
+      account: 0,
+      address: STALE_ADDRESS,
+      receiveIndex: 0,
+      changeIndex: 0,
+      gapLimit: 20,
+    }],
+  };
+  const vault = {
+    get status() { return { exists: true, unlocked, ready: true }; },
+    async init() {},
+    async unlock() { unlocked = true; },
+    lock() { unlocked = false; },
+    address(_branch = 0, _index = 0, _account = 0) { return ADDRESS; },
+    projectedBook(current = null) {
+      return {
+        current: current || "d0",
+        items: [{
+          id: "d0",
+          name: "Account 1",
+          kind: "derived",
+          account: 0,
+          address: ADDRESS,
+          receiveIndex: 0,
+          changeIndex: 0,
+          gapLimit: 20,
+        }],
+      };
+    },
+    async noteBook(next) { book = structuredClone(next); },
+    subscribe() { return () => {}; },
+  };
+  const storage = {
+    async getVault() { return { version: 2 }; },
+    async setVault() {},
+    async getBook() { return structuredClone(book); },
+    async setBook(next) { book = structuredClone(next); },
+    async getIdle() { return null; },
+  };
+  let copied = "";
+  const app = mountShell(document, {
+    vault,
+    storage,
+    async fetchAddress() { throw new Error("连不上索引节点"); },
+    async fetchUtxos() { return []; },
+    broadcaster: {},
+    async copyText(value) { copied = value; },
+    async drawQr() {},
+  });
+  await app.ready;
+  document.getElementById("lockPw").value = "public-test-password-123";
+  document.getElementById("lockUnlock").click();
+  for (let i = 0; i < 40 && document.getElementById("screen-home").hidden; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  for (let i = 0; i < 40 && document.getElementById("homeAddr").textContent !== ADDRESS; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(document.getElementById("homeAddr").textContent, ADDRESS);
+  assert.equal(document.getElementById("switchAddr").textContent, `${ADDRESS.slice(0, 6)}…${ADDRESS.slice(-4)}`);
+  assert.equal(book.items[0].address, ADDRESS);
+
+  document.getElementById("copySwitch").click();
+  for (let i = 0; i < 20 && !copied; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(copied, ADDRESS);
+
+  try {
+    document.getElementById("accountSwitch").click();
+    for (let i = 0; i < 40 && document.getElementById("accountSheet").hidden; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const sheetAddr = document.querySelector("#accountList small")?.textContent || "";
+    assert.equal(sheetAddr, `${ADDRESS.slice(0, 6)}…${ADDRESS.slice(-4)}`);
+    assert.equal(sheetAddr.includes("rerl"), false);
+  } finally {
+    globalThis.document = previousDocument;
+  }
 });
