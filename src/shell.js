@@ -180,8 +180,12 @@ export function mountShell(document, {
     }
     const sendScreen = state.screen === "screen-send";
     if (sendScreen) {
-      paintFeesLoading();
-      if (state.feeNote) paintFeesReady();
+      if (state.feeNote) {
+        state.feeNote = feeNoteForMenu({ fallback: state.feeFallback, menu: state.rates });
+        paintFeesReady();
+      } else {
+        paintFeesLoading();
+      }
       paintCustomFeeEst();
       syncSendCompose();
       q("toConfirm").textContent = t("action.review");
@@ -196,6 +200,8 @@ export function mountShell(document, {
   const DRAFT_FORGET = new Set([
     "screen-welcome", "screen-home", "screen-done", "screen-activity", "screen-receive",
     "screen-settings", "screen-privacy", "screen-donate", "screen-rename", "screen-idle",
+    "screen-addresses",
+    "screen-structure",
   ]);
   function beginReads() {
     reads.abort();
@@ -214,14 +220,20 @@ export function mountShell(document, {
   }
   const INDEX_FRESH_MS = 60_000;
   const state = {
-    screen: "screen-welcome", flow: "create", password: "", mnemonic: "", mnemonicWords: 12, secret: "", fee: "standard",
-    rates: { slow: 2, standard: 8, fast: 20 }, feeNote: "", custom: false, draft: null, txid: "",
+    screen: "screen-welcome", flow: "create", password: "", mnemonic: "", mnemonicWords: 12, secret: "", fee: "fast",
+    rates: { slow: 1, standard: 10, fast: 100 }, feeFallback: false, feeNote: "", custom: false, draft: null, txid: "",
     book: { current: "d0", items: [] }, hidden: false, busy: false, balance: null,
     rows: [], activityError: "", pendingAdd: "", pendingWatch: "", pendingWatchId: "", idleMin: 5,
     cursorBuckets: {},
     savedBook: { current: "d0", items: [] },
     cursorFresh: Object.create(null),
     homeCache: Object.create(null),
+    // Temporary receive-page index only; home/copy always stay on the first receive address (0/0).
+    tempReceiveIndex: null,
+    // "local" | "scan" | null — which temporary path last painted the Receive page.
+    tempReceiveSource: null,
+    // Locally observed used receive addresses (no indexer round-trip on "new address").
+    usedReceiveByAccount: Object.create(null),
     pearlUsd: null,
     priceStatus: "idle",
     sendMax: false,
@@ -286,6 +298,7 @@ export function mountShell(document, {
     if (id === "screen-settings") paintSettings();
     if (id === "screen-idle") paintIdle();
     if (id === "screen-rename" && currentItem()) q("renameInput").value = currentItem().name;
+    if (id !== "screen-receive") pickSheet(false);
     rememberDraft();
   }
 
@@ -293,6 +306,7 @@ export function mountShell(document, {
     const dialog = q("accountSheet");
     const modal = typeof dialog.showModal === "function";
     if (open) {
+      pickSheet(false);
       dialog.hidden = false;
       if (modal) {
         if (!dialog.open) dialog.showModal();
@@ -307,6 +321,27 @@ export function mountShell(document, {
     dialog.hidden = true;
     q("accountScrim").hidden = true;
     setPageInert(false);
+  }
+  function pickSheet(open) {
+    const dialog = q("recvPickSheet");
+    if (!dialog) return;
+    const modal = typeof dialog.showModal === "function";
+    if (open) {
+      sheet(false);
+      dialog.hidden = false;
+      if (modal) {
+        if (!dialog.open) dialog.showModal();
+        q("recvPickScrim").hidden = true;
+      } else {
+        q("recvPickScrim").hidden = false;
+        setPageInert(true);
+      }
+      return;
+    }
+    if (modal && dialog.open) dialog.close();
+    dialog.hidden = true;
+    q("recvPickScrim").hidden = true;
+    if (q("accountSheet").hidden) setPageInert(false);
   }
 
   function toast(message) {
@@ -449,15 +484,10 @@ export function mountShell(document, {
         const prev = byId.get(item.id);
         if (item.kind === "derived" && prev?.kind === "derived") {
           if (prev.name) item.name = prev.name;
-          // Different addresses mean the cursors are not for the same chain. Keep the address and cursor already derived locally for the current network.
-          if (prev.address && item.address && prev.address !== item.address) {
-            if (checkAddress(prev.address).ok) item.address = prev.address;
-            item.receiveIndex = prev.receiveIndex || 0;
-            item.changeIndex = prev.changeIndex || 0;
-          } else {
-            item.receiveIndex = Math.max(item.receiveIndex || 0, prev.receiveIndex || 0);
-            item.changeIndex = Math.max(item.changeIndex || 0, prev.changeIndex || 0);
-          }
+          // projectedBook already re-derives 0/0 for the active network. Keep that address.
+          // Only merge cursor watermarks from the local book so a stale local address cannot win.
+          item.receiveIndex = Math.max(item.receiveIndex || 0, prev.receiveIndex || 0);
+          item.changeIndex = Math.max(item.changeIndex || 0, prev.changeIndex || 0);
         }
       }
       // Until the sealed directory catches up, keep only derived accounts from the local book. An unsealed watch address must not be written back from that book.
@@ -501,6 +531,68 @@ export function mountShell(document, {
       const homeScan = { ...(meta.homeScan || {}), [itemId]: [...new Set(addresses.filter(Boolean))] };
       await storage.setMeta({ ...meta, homeScan });
     } catch { /* A failed scan-address write does not block the home screen. */ }
+  }
+  function usedReceiveKey(itemId) {
+    return `${activeNetwork()}::${itemId || ""}`;
+  }
+  const usedReceivePersistTail = Object.create(null);
+  function rememberUsedReceive(itemId, address, { persist = false } = {}) {
+    if (!itemId || !address || typeof address !== "string") return false;
+    const key = usedReceiveKey(itemId);
+    const bucket = state.usedReceiveByAccount[key] || new Set();
+    const grew = !bucket.has(address);
+    bucket.add(address);
+    state.usedReceiveByAccount[key] = bucket;
+    // Queue durable writes so overlapping gap-scan persists cannot clobber each other.
+    if (persist && grew) enqueueUsedReceivePersist(itemId);
+    return grew;
+  }
+  function enqueueUsedReceivePersist(itemId) {
+    if (!itemId) return Promise.resolve();
+    const prev = usedReceivePersistTail[itemId] || Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(() => persistUsedReceiveAddresses(itemId));
+    usedReceivePersistTail[itemId] = next.catch(() => {});
+    return next;
+  }
+  async function flushUsedReceivePersists(itemId) {
+    if (!itemId) return;
+    await (usedReceivePersistTail[itemId] || Promise.resolve()).catch(() => {});
+    await persistUsedReceiveAddresses(itemId);
+  }
+  async function readPersistedUsedReceiveAddresses(itemId) {
+    if (!itemId || !storage.getMeta) return [];
+    try {
+      const meta = await storage.getMeta();
+      const byNetwork = meta?.usedReceive?.[activeNetwork()];
+      const listed = byNetwork?.[itemId];
+      return Array.isArray(listed) ? listed.filter((address) => typeof address === "string" && address) : [];
+    } catch {
+      return [];
+    }
+  }
+  async function persistUsedReceiveAddresses(itemId) {
+    if (!itemId || !storage.getMeta || !storage.setMeta) return;
+    try {
+      const key = usedReceiveKey(itemId);
+      const memory = [...(state.usedReceiveByAccount[key] || [])];
+      const meta = (await storage.getMeta()) || {};
+      const usedReceive = { ...(meta.usedReceive || {}) };
+      const byNetwork = { ...(usedReceive[activeNetwork()] || {}) };
+      const merged = new Set([...(byNetwork[itemId] || []), ...memory]);
+      byNetwork[itemId] = [...merged];
+      usedReceive[activeNetwork()] = byNetwork;
+      await storage.setMeta({ ...meta, usedReceive });
+      state.usedReceiveByAccount[key] = merged;
+    } catch { /* A failed used-receive write does not block receive. */ }
+  }
+  async function localUsedReceiveAddresses(itemId) {
+    const key = usedReceiveKey(itemId);
+    const bucket = state.usedReceiveByAccount[key] || new Set();
+    for (const address of await readPersistedUsedReceiveAddresses(itemId)) bucket.add(address);
+    state.usedReceiveByAccount[key] = bucket;
+    return bucket;
   }
   async function pathForDerivedAddress(item, address, floor = 0) {
     if (!item || item.kind !== "derived" || !vault.address || !address) return null;
@@ -615,14 +707,18 @@ export function mountShell(document, {
     let balance = 0n;
     const groups = [];
     let activityError = "";
+    let usedGrew = false;
     for (const entry of ok) {
       balance += entry.snap.balance ?? 0n;
       if (entry.snap.activityError) activityError = entry.snap.activityError;
       groups.push(entry.snap.activity || []);
+      if (item.kind === "derived" && addressLooksUsed(entry.snap)) {
+        usedGrew = rememberUsedReceive(item.id, entry.address) || usedGrew;
+      }
     }
     const hintAddresses = [item.address, ...scan];
     const rows = presentActivity(await mergeWalletActivity(groups, hintAddresses));
-    const receive = (await shownReceiveAddress(item)) || item.address;
+    const receive = (await defaultReceiveAddress(item)) || item.address;
     // Preview paints (gap scan still pending) must not overwrite the durable home cache with a partial total.
     if (persist) {
       writeHomeCache(item.id, {
@@ -633,6 +729,7 @@ export function mountShell(document, {
         scanAddresses: scan,
       });
       await persistScanAddresses(item.id, scan);
+      if (usedGrew) await flushUsedReceivePersists(item.id);
     }
     state.balance = balance;
     state.rows = rows;
@@ -734,9 +831,6 @@ export function mountShell(document, {
     const grains = BigInt(rateGrainPerVb) * FEE_ESTIMATE_VB;
     return t("fee.estimate", { amount: formatGrains(grains) });
   }
-  function feeRateLabel(rateGrainPerVb) {
-    return t("fee.rate", { rate: Number(rateGrainPerVb) });
-  }
   function ago(unix) {
     if (unix == null) return t("time.notInBlock");
     const delta = Math.max(0, Math.floor(Date.now() / 1000 - unix));
@@ -799,28 +893,62 @@ export function mountShell(document, {
   function sendAmountValue() {
     return state.sendMax ? "MAX" : q("sendAmount").value.trim().replace(/,/g, "");
   }
+  function paintFeeSelected() {
+    const el = q("feeSelected");
+    if (!el) return;
+    const loading = document.querySelector(".fees")?.classList.contains("is-loading");
+    if (loading && !state.feeNote) {
+      el.classList.add("is-loading");
+      el.textContent = t("fee.querying");
+      return;
+    }
+    el.classList.remove("is-loading");
+    let rate = null;
+    if (state.custom) rate = customRateValue();
+    else rate = state.rates[state.fee];
+    if (rate == null) {
+      el.textContent = "";
+      return;
+    }
+    el.textContent = t("fee.selected", {
+      rate: Number(rate),
+      amount: formatGrains(BigInt(rate) * FEE_ESTIMATE_VB),
+    });
+  }
   function paintFeesLoading() {
     const fees = document.querySelector(".fees");
     fees?.classList.add("is-loading");
     fees?.setAttribute("aria-busy", "true");
     q("feeNote").textContent = t("fee.loadingNote");
-    for (const name of ["slow", "standard", "fast"]) {
-      const card = q(`fee-${name}`);
-      card.querySelector("[data-fee-est]").textContent = t("fee.querying");
-      card.querySelector("[data-fee-rate]").textContent = "·";
-    }
+    paintFeeSelected();
   }
   function paintFeesReady() {
     const fees = document.querySelector(".fees");
     fees?.classList.remove("is-loading");
     fees?.removeAttribute("aria-busy");
     q("feeNote").textContent = state.feeNote;
-    for (const name of ["slow", "standard", "fast"]) {
-      const card = q(`fee-${name}`);
-      const rate = state.rates[name];
-      card.querySelector("[data-fee-est]").textContent = feeEstimateLabel(rate);
-      card.querySelector("[data-fee-rate]").textContent = feeRateLabel(rate);
+    paintFeeSelected();
+  }
+  function feeNoteForMenu(fees) {
+    if (fees?.fallback) return t("fee.note.fallback");
+    const { slow, standard, fast } = fees?.menu || state.rates;
+    if (slow === standard && standard !== fast) return t("fee.note.tied");
+    return t("fee.note.live");
+  }
+  async function refreshFeeMenu({ paint = true } = {}) {
+    try {
+      const fees = await estimateFees();
+      state.rates = fees.menu;
+      state.feeFallback = Boolean(fees.fallback);
+      state.feeNote = feeNoteForMenu(fees);
+    } catch {
+      state.feeFallback = true;
+      state.feeNote = t("fee.note.fallback");
     }
+    if (paint && state.screen === "screen-send") paintFeesReady();
+  }
+  function warmFeeMenu() {
+    void refreshFeeMenu({ paint: state.screen === "screen-send" });
   }
   function fillAddress(el, address) {
     el.replaceChildren();
@@ -1314,10 +1442,13 @@ export function mountShell(document, {
       try { await ensureDerived(0); } catch { /* With no account list yet, use the derived address from the unlock. */ }
     }
     let item = currentItem();
-    if (item?.kind === "derived" && vault.status.unlocked && (!item.address || !checkAddress(item.address).ok)) {
+    if (item?.kind === "derived" && vault.status.unlocked) {
       try {
-        item.address = await vault.address(0, 0, item.account);
-        await saveBook();
+        const expected = await vault.address(0, 0, item.account);
+        if (!item.address || item.address !== expected) {
+          item.address = expected;
+          await saveBook();
+        }
       } catch { /* The empty check below still runs. */ }
       item = currentItem();
     }
@@ -1353,8 +1484,10 @@ export function mountShell(document, {
       q("homeBalance").textContent = state.hidden ? "••••" : t("home.balance.unknown");
       return;
     }
-    q("switchAddr").textContent = shortAddr(item.address || "");
-    q("homeAddr").textContent = item.address || "";
+    // Home chip is always the first receive address (0/0), never a temporary receive-page address.
+    const headerAddr = (await defaultReceiveAddress(item)) || item.address;
+    q("switchAddr").textContent = shortAddr(headerAddr || "");
+    q("homeAddr").textContent = headerAddr || "";
     paintAccount(item);
     const cached = readHomeCache(item.id);
     const hasCache = applyHomeCache(cached);
@@ -1366,6 +1499,7 @@ export function mountShell(document, {
       renderActivity(q("homeTx"), [], "screen-home");
     }
     show("screen-home");
+    warmFeeMenu();
     // Cache first when present. Balance paints before gap rescan and before the USD quote.
     setHomeSoftRefresh(hasCache);
     const derivedRefresh = item.kind === "derived" && vault.status.unlocked;
@@ -1963,6 +2097,17 @@ export function mountShell(document, {
     paintAccountSheet();
     if (wasCurrent) await openHome();
   }
+  function peekReceiveAddress(item) {
+    if (!item) return "";
+    if (item.kind !== "derived" || !vault.status.unlocked) return item.address || "";
+    const cached = readHomeCache(item.id)?.receive;
+    if (cached) return cached;
+    try {
+      const got = vault.address(0, 0, item.account ?? 0);
+      if (got && typeof got.then !== "function") return got;
+    } catch { /* Fall back to the book address. */ }
+    return item.address || "";
+  }
   function paintAccountSheet() {
     const list = q("accountList");
     list.replaceChildren();
@@ -1978,7 +2123,9 @@ export function mountShell(document, {
       name.textContent = item.name;
       const addr = document.createElement("small");
       const kindLabel = item.kind === "watch" ? t("account.kind.watchPrefix") : item.kind === "key" ? t("account.kind.keyPrefix") : "";
-      addr.textContent = `${kindLabel}${shortAddr(item.address)}`;
+      // Same address the home chip / copy use: current receive, not a stale book 0/0.
+      const shown = peekReceiveAddress(item);
+      addr.textContent = shown ? `${kindLabel}${shortAddr(shown)}` : kindLabel;
       const meta = document.createElement("span");
       meta.append(name, addr);
       pick.append(mark, meta);
@@ -2062,7 +2209,7 @@ export function mountShell(document, {
       list.append(row);
     }
   }
-  q("accountSwitch").addEventListener("click", async () => {
+  q("accountSwitch").addEventListener("click", () => {
     paintAccountSheet();
     sheet(true);
   });
@@ -2082,7 +2229,21 @@ export function mountShell(document, {
       hideAddAccountWarn();
       return;
     }
+    if (!q("recvPickSheet").hidden) {
+      pickSheet(false);
+      return;
+    }
     if (!q("accountSheet").hidden) sheet(false);
+  });
+  q("closeRecvPick").addEventListener("click", () => pickSheet(false));
+  q("recvPickScrim").addEventListener("click", () => pickSheet(false));
+  q("recvPickSheet").addEventListener("close", () => {
+    q("recvPickSheet").hidden = true;
+    q("recvPickScrim").hidden = true;
+    if (q("accountSheet").hidden) setPageInert(false);
+  });
+  q("recvPickSheet").addEventListener("click", (event) => {
+    if (event.target === q("recvPickSheet")) pickSheet(false);
   });
   q("addDerived").addEventListener("click", async () => {
     try {
@@ -2169,6 +2330,8 @@ export function mountShell(document, {
       };
     }
     state.homeCache = next;
+    state.tempReceiveIndex = null;
+    state.tempReceiveSource = null;
   }
   function readHomeCache(itemId) {
     return itemId ? state.homeCache[itemId] || null : null;
@@ -2182,6 +2345,10 @@ export function mountShell(document, {
     state.balance = cached.balance;
     state.rows = cached.rows;
     state.activityError = cached.activityError || "";
+    if (cached.receive) {
+      q("switchAddr").textContent = shortAddr(cached.receive);
+      q("homeAddr").textContent = cached.receive;
+    }
     paintBalance();
     q("availLine").textContent = t("home.avail", { amount: pretty(cached.balance) });
     renderActivity(q("homeTx"), state.rows.slice(0, 4), "screen-home");
@@ -2204,7 +2371,8 @@ export function mountShell(document, {
         prevReceive,
       );
       if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
-      item.receiveIndex = receive.next;
+      // Never rewind past an intentionally issued receive cursor (desktop-like rotation).
+      item.receiveIndex = Math.max(prevReceive, receive.next);
       scanned.push("receive");
     }
     if (chains.includes("change")) {
@@ -2214,7 +2382,7 @@ export function mountShell(document, {
         prevChange,
       );
       if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
-      item.changeIndex = change.next;
+      item.changeIndex = Math.max(prevChange, change.next);
       scanned.push("change");
     }
     if (typeof vault.describe === "function") {
@@ -2231,8 +2399,13 @@ export function mountShell(document, {
   }
   async function addressWasUsed(branch, index, account) {
     if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
-    const snap = await readAddress(await vault.address(branch, index, account));
-    if (addressLooksUsed(snap)) return true;
+    const address = await vault.address(branch, index, account);
+    const snap = await readAddress(address);
+    if (addressLooksUsed(snap)) {
+      const owner = state.book.items.find((entry) => entry.kind === "derived" && (entry.account ?? 0) === (account ?? 0));
+      if (owner) rememberUsedReceive(owner.id, address, { persist: true });
+      return true;
+    }
     // Empty addresses may still carry activityError when history JSON is missing. A zero balance and
     // zero tx count means unused — throwing here used to freeze changeIndex at 0 after import.
     if (snap.activityError) {
@@ -2242,16 +2415,288 @@ export function mountShell(document, {
     }
     return false;
   }
-  async function shownReceiveAddress(item) {
+  async function defaultReceiveAddress(item) {
     if (!item) return "";
-    const index = item.kind === "derived" && Number.isInteger(item.receiveIndex) ? item.receiveIndex : 0;
-    if (item.kind !== "derived" || !vault.status.unlocked) return item.address;
-    try { return await vault.address(0, index, item.account ?? 0); }
-    catch { return item.address; }
+    if (item.kind !== "derived" || !vault.status.unlocked) return item.address || "";
+    try { return await vault.address(0, 0, item.account ?? 0); }
+    catch { return item.address || ""; }
   }
-  async function paintReceive(address) {
+  function paintReceiveChrome(item, { temporary = false, source = null, scanning = false } = {}) {
+    const canRotate = item?.kind === "derived" && vault.status.unlocked;
+    const hintKey = source === "scan"
+      ? "receive.tempHintScan"
+      : source === "pick"
+        ? "receive.tempHintPick"
+        : "receive.tempHintLocal";
+    q("recvTools").hidden = !canRotate;
+    q("recvTempHint").hidden = !temporary || scanning;
+    if (temporary && !scanning) {
+      q("recvTempHint").textContent = t(hintKey);
+      q("recvTempHint").setAttribute("data-i18n", hintKey);
+    }
+    q("recvScanHint").hidden = !scanning;
+    q("newRecv").disabled = scanning;
+    q("newRecvScan").disabled = scanning;
+    q("pickRecv").disabled = scanning;
+    q("newRecvScan").classList.toggle("is-loading", scanning);
+    q("newRecvScan").setAttribute("aria-busy", scanning ? "true" : "false");
+  }
+  async function listKnownReceiveAddresses(item) {
+    if (!item) return [];
+    if (item.kind !== "derived") {
+      return item.address ? [{ index: null, address: item.address, tags: ["default"] }] : [];
+    }
+    if (!vault.status.unlocked || !vault.address) return [];
+    const account = item.account ?? 0;
+    const used = await localUsedReceiveAddresses(item.id);
+    const end = Math.max(0, item.receiveIndex || 0, state.tempReceiveIndex || 0);
+    const byAddress = new Map();
+    for (let index = 0; index <= end; index += 1) {
+      try {
+        const address = await vault.address(0, index, account);
+        const tags = [];
+        if (index === 0) tags.push("default");
+        if (used.has(address)) tags.push("used");
+        byAddress.set(address, { branch: 0, index, address, tags });
+      } catch { /* Skip a path that cannot be derived. */ }
+    }
+    for (const address of used) {
+      if (byAddress.has(address)) continue;
+      try {
+        const path = await pathForDerivedAddress(item, address, end + 20);
+        if (!path || path.branch !== 0) continue;
+        const tags = [];
+        if (path.index === 0) tags.push("default");
+        tags.push("used");
+        byAddress.set(address, { branch: 0, index: path.index, address, tags });
+      } catch { /* Keep going if one used address cannot be remapped. */ }
+    }
+    return [...byAddress.values()].sort((a, b) => (a.index ?? 1e9) - (b.index ?? 1e9));
+  }
+  function addressRowTitle(row) {
+    if (row.branch === 1 && Number.isInteger(row.index)) return t("structure.changeIndex", { n: row.index });
+    if (row.branch === 0 && Number.isInteger(row.index)) return t("structure.receiveIndex", { n: row.index });
+    if (Number.isInteger(row.index)) return t("addresses.tag.index", { n: row.index });
+    return t("addresses.tag.default");
+  }
+  function addressTagLabel(tag) {
+    if (tag === "default") return t("addresses.tag.default");
+    if (tag === "used") return t("addresses.tag.used");
+    if (tag === "change") return t("addresses.tag.change");
+    return tag;
+  }
+  function renderReceiveAddressRows(listEl, rows, { onSelect = null, showCopy = true } = {}) {
+    listEl.replaceChildren();
+    for (const row of rows) {
+      const card = document.createElement("div");
+      card.className = "addr-row";
+      const main = document.createElement(onSelect ? "button" : "div");
+      if (onSelect) {
+        main.type = "button";
+        main.className = "addr-row-main";
+        main.addEventListener("click", () => onSelect(row));
+      } else {
+        main.className = "addr-row-main";
+      }
+      const title = document.createElement("b");
+      title.textContent = addressRowTitle(row);
+      const addr = document.createElement("small");
+      addr.textContent = row.address;
+      const tags = document.createElement("div");
+      tags.className = "addr-row-tags";
+      for (const tag of row.tags || []) {
+        const chip = document.createElement("span");
+        chip.className = `addr-tag${tag === "used" || tag === "change" ? " used" : ""}`;
+        chip.textContent = addressTagLabel(tag);
+        tags.append(chip);
+      }
+      main.append(title, addr, tags);
+      card.append(main);
+      if (showCopy) {
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "icon";
+        copy.setAttribute("aria-label", t("addresses.copyAria"));
+        copy.append(svgIcon("M8 8h10v10H8zM6 6h10v2H8v8H6z"));
+        copy.addEventListener("click", (event) => {
+          event.stopPropagation();
+          copyText(row.address).then(() => toast(t("toast.addressCopied")));
+        });
+        card.append(copy);
+      }
+      listEl.append(card);
+    }
+  }
+  async function listAccountStructure(item) {
+    if (!item) return { receive: [], change: [] };
+    if (item.kind !== "derived") {
+      const single = item.address
+        ? [{ branch: 0, index: null, address: item.address, tags: ["default"] }]
+        : [];
+      return { receive: single, change: [] };
+    }
+    if (!vault.status.unlocked || !vault.address) return { receive: [], change: [] };
+    const account = item.account ?? 0;
+    const used = await localUsedReceiveAddresses(item.id);
+    const receiveEnd = Math.max(0, item.receiveIndex || 0, state.tempReceiveIndex || 0);
+    const changeEnd = Math.max(0, item.changeIndex || 0);
+    const receive = [];
+    const change = [];
+    for (let index = 0; index <= receiveEnd; index += 1) {
+      try {
+        const address = await vault.address(0, index, account);
+        const tags = [];
+        if (index === 0) tags.push("default");
+        if (used.has(address)) tags.push("used");
+        receive.push({ branch: 0, index, address, tags });
+      } catch { /* Skip. */ }
+    }
+    for (let index = 0; index <= changeEnd; index += 1) {
+      try {
+        const address = await vault.address(1, index, account);
+        const tags = ["change"];
+        if (used.has(address)) tags.push("used");
+        change.push({ branch: 1, index, address, tags });
+      } catch { /* Skip. */ }
+    }
+    return { receive, change };
+  }
+  async function paintAccountStructure() {
+    const item = currentItem();
+    const receiveList = q("structureReceiveList");
+    const changeList = q("structureChangeList");
+    const receiveEmpty = q("structureReceiveEmpty");
+    const changeEmpty = q("structureChangeEmpty");
+    const error = q("structureError");
+    note("structureError", "");
+    receiveList.replaceChildren();
+    changeList.replaceChildren();
+    receiveEmpty.hidden = true;
+    changeEmpty.hidden = true;
+    if (!item) {
+      receiveEmpty.hidden = false;
+      receiveEmpty.textContent = t("addresses.empty");
+      return;
+    }
+    if (item.kind !== "derived") {
+      receiveEmpty.hidden = false;
+      receiveEmpty.textContent = t("structure.watchOnly");
+      if (item.address) {
+        renderReceiveAddressRows(receiveList, [{
+          branch: 0, index: null, address: item.address, tags: ["default"],
+        }], { showCopy: true });
+        receiveEmpty.hidden = true;
+      }
+      return;
+    }
+    if (!vault.status.unlocked) {
+      receiveEmpty.hidden = false;
+      receiveEmpty.textContent = t("structure.unlockRequired");
+      return;
+    }
+    const { receive, change } = await listAccountStructure(item);
+    if (!receive.length) {
+      receiveEmpty.hidden = false;
+      receiveEmpty.textContent = t("structure.receiveEmpty");
+    } else {
+      renderReceiveAddressRows(receiveList, receive, { showCopy: true });
+    }
+    if (!change.length) {
+      changeEmpty.hidden = false;
+      changeEmpty.textContent = t("structure.changeEmpty");
+    } else {
+      renderReceiveAddressRows(changeList, change, { showCopy: true });
+    }
+    error.textContent = "";
+  }
+  async function openAccountStructure() {
+    show("screen-structure");
+    setStructureScanning(false);
+    await paintAccountStructure();
+  }
+  function setStructureScanning(on) {
+    const btn = q("structureScan");
+    btn.disabled = on;
+    btn.classList.toggle("is-loading", on);
+    btn.setAttribute("aria-busy", on ? "true" : "false");
+    q("structureScanHint").hidden = !on;
+  }
+  async function scanAccountStructure() {
+    const item = currentItem();
+    if (!item || item.kind !== "derived" || !vault.status.unlocked) {
+      toast(t("structure.unlockRequired"));
+      return;
+    }
+    setStructureScanning(true);
+    note("structureError", "");
+    beginReads();
+    try {
+      if (state.cursorFresh[item.id]) {
+        delete state.cursorFresh[item.id].receive;
+        delete state.cursorFresh[item.id].change;
+      }
+      await refreshIndexes(item, { chains: ["receive", "change"] });
+      if (reads.signal.aborted) return;
+      await paintAccountStructure();
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      note("structureError", error instanceof Error ? speak(error) : t("error.queryFailed"));
+    } finally {
+      setStructureScanning(false);
+    }
+  }
+  async function openAddressManager() {
+    const item = currentItem();
+    show("screen-addresses");
+    const list = q("addressManageList");
+    const empty = q("addressManageEmpty");
+    list.replaceChildren();
+    empty.hidden = true;
+    if (item?.kind === "derived" && !vault.status.unlocked) {
+      empty.hidden = false;
+      empty.textContent = t("addresses.unlockRequired");
+      return;
+    }
+    const rows = await listKnownReceiveAddresses(item);
+    if (!rows.length) {
+      empty.hidden = false;
+      empty.textContent = t("addresses.empty");
+      return;
+    }
+    empty.hidden = true;
+    renderReceiveAddressRows(list, rows, { showCopy: true });
+  }
+  async function openReceivePicker() {
+    const item = currentItem();
+    if (!item || item.kind !== "derived" || !vault.status.unlocked) return;
+    const rows = await listKnownReceiveAddresses(item);
+    const list = q("recvPickList");
+    renderReceiveAddressRows(list, rows, {
+      showCopy: false,
+      onSelect: async (row) => {
+        pickSheet(false);
+        if (!row?.address || state.screen !== "screen-receive") return;
+        if (Number.isInteger(row.index)) {
+          state.tempReceiveIndex = row.index;
+          item.receiveIndex = Math.max(item.receiveIndex || 0, row.index);
+          void saveBook().catch(() => {});
+        }
+        await paintReceive(row.address, { temporary: true, source: "pick" });
+        toast(t("toast.receivePicked"));
+      },
+    });
+    pickSheet(true);
+  }
+  async function paintReceive(address, { temporary = false, source = null, scanning = false } = {}) {
     state.receiveAddress = address;
+    if (!temporary) state.tempReceiveSource = null;
+    else if (source) state.tempReceiveSource = source;
     fillAddress(q("recvAddr"), address);
+    paintReceiveChrome(currentItem(), {
+      temporary,
+      source: source || state.tempReceiveSource,
+      scanning,
+    });
     try {
       await drawQr(q("qr-canvas"), address);
       note("qr-error", "");
@@ -2259,34 +2704,135 @@ export function mountShell(document, {
       note("qr-error", t("qr.fail"));
     }
   }
+  async function pickTemporaryReceiveIndex(item, { used } = {}) {
+    const floor = Math.max(1, Number.isInteger(item.receiveIndex) ? item.receiveIndex : 0);
+    const prevTemp = Number.isInteger(state.tempReceiveIndex) ? state.tempReceiveIndex : 0;
+    let next = Math.max(floor, prevTemp + 1);
+    const account = item.account ?? 0;
+    const known = used || await localUsedReceiveAddresses(item.id);
+    const limit = next + Math.max(item.gapLimit || 20, 20);
+    while (next < limit) {
+      const candidate = await vault.address(0, next, account);
+      if (!known.has(candidate)) break;
+      next += 1;
+    }
+    return next;
+  }
+  async function issueTemporaryReceive(item) {
+    if (!item || item.kind !== "derived" || !vault.status.unlocked) {
+      return (await defaultReceiveAddress(item)) || item?.address || "";
+    }
+    // Local-only: never wait on a gap scan here (that was multi-second on indexer RTT).
+    // Skip addresses this install already observed as used (home/gap cache), still no network I/O.
+    const next = await pickTemporaryReceiveIndex(item);
+    state.tempReceiveIndex = next;
+    item.receiveIndex = Math.max(item.receiveIndex || 0, next);
+    const address = await vault.address(0, next, item.account ?? 0);
+    void saveBook().catch(() => {});
+    return address;
+  }
+  async function issueTemporaryReceiveFromChain(item) {
+    if (!item || item.kind !== "derived" || !vault.status.unlocked) {
+      return (await defaultReceiveAddress(item)) || item?.address || "";
+    }
+    beginReads();
+    // Always hit the indexer gap scan for this explicit user action.
+    if (state.cursorFresh[item.id]) delete state.cursorFresh[item.id].receive;
+    await refreshIndexes(item, { chains: ["receive"] });
+    if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
+    const account = item.account ?? 0;
+    const used = await localUsedReceiveAddresses(item.id);
+    let next = await pickTemporaryReceiveIndex(item, { used });
+    const limit = next + Math.max(item.gapLimit || 20, 20);
+    let found = false;
+    while (next < limit) {
+      if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
+      if (!(await addressWasUsed(0, next, account))) {
+        found = true;
+        break;
+      }
+      const address = await vault.address(0, next, account);
+      rememberUsedReceive(item.id, address, { persist: true });
+      used.add(address);
+      next += 1;
+    }
+    await flushUsedReceivePersists(item.id);
+    if (!found) throw new Error(t("receive.scanExhausted"));
+    state.tempReceiveIndex = next;
+    item.receiveIndex = Math.max(item.receiveIndex || 0, next);
+    await saveBook();
+    return vault.address(0, next, account);
+  }
   q("goReceive").addEventListener("click", async () => {
     try {
       const item = currentItem();
-      // Open the page immediately from the local cursor. Use the cache when home just scanned; otherwise scan only the receive chain in the background.
-      const address = await shownReceiveAddress(item);
+      if (!item) return;
+      // Re-entering Receive always resets to the fixed first address.
+      state.tempReceiveIndex = null;
+      state.tempReceiveSource = null;
       show("screen-receive");
-      await paintReceive(address);
-      if (!item || item.kind !== "derived" || !vault.status.unlocked) return;
-      if (indexesFresh(item, ["receive"])) return;
-      beginReads();
-      const before = state.receiveAddress;
-      await refreshIndexes(item, { chains: ["receive"] });
-      if (reads.signal.aborted || state.screen !== "screen-receive") return;
-      const next = await shownReceiveAddress(item);
-      if (next && next !== before) {
-        await paintReceive(next);
-        toast(t("toast.newReceiveAddr"));
+      if (item.kind !== "derived" || !vault.status.unlocked) {
+        await paintReceive(item.address || "", { temporary: false });
+        return;
       }
+      const address = (await defaultReceiveAddress(item)) || item.address || "";
+      await paintReceive(address, { temporary: false });
     } catch (error) {
       if (error?.name === "AbortError") return;
       if (q("screen-receive").hidden) show("screen-receive");
       note("qr-error", error instanceof Error ? speak(error) : t("receive.openFail"));
     }
   });
+  q("newRecv").addEventListener("click", async () => {
+    try {
+      const item = currentItem();
+      if (!item || item.kind !== "derived" || !vault.status.unlocked) return;
+      if (q("newRecvScan").classList.contains("is-loading")) return;
+      const address = await issueTemporaryReceive(item);
+      if (state.screen !== "screen-receive") return;
+      await paintReceive(address, { temporary: true, source: "local" });
+      toast(t("toast.newReceiveAddrLocal"));
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      note("qr-error", error instanceof Error ? speak(error) : t("receive.openFail"));
+    }
+  });
+  q("newRecvScan").addEventListener("click", async () => {
+    const item = currentItem();
+    if (!item || item.kind !== "derived" || !vault.status.unlocked) return;
+    if (q("newRecvScan").classList.contains("is-loading")) return;
+    paintReceiveChrome(item, {
+      temporary: Boolean(state.tempReceiveIndex),
+      source: state.tempReceiveSource,
+      scanning: true,
+    });
+    try {
+      const address = await issueTemporaryReceiveFromChain(item);
+      if (reads.signal.aborted || state.screen !== "screen-receive") return;
+      await paintReceive(address, { temporary: true, source: "scan" });
+      toast(t("toast.newReceiveAddrScan"));
+    } catch (error) {
+      paintReceiveChrome(item, {
+        temporary: Boolean(state.tempReceiveIndex),
+        source: state.tempReceiveSource,
+        scanning: false,
+      });
+      if (error?.name === "AbortError") return;
+      note("qr-error", error instanceof Error ? speak(error) : t("receive.openFail"));
+    }
+  });
+  q("pickRecv").addEventListener("click", async () => {
+    try {
+      if (q("newRecvScan").classList.contains("is-loading")) return;
+      await openReceivePicker();
+    } catch (error) {
+      note("qr-error", error instanceof Error ? speak(error) : t("receive.openFail"));
+    }
+  });
   q("copySwitch").addEventListener("click", async (event) => {
     event.stopPropagation();
     const item = currentItem();
-    if (item) copyText((await shownReceiveAddress(item)) || item.address).then(() => toast(t("toast.addressCopied")));
+    if (item) copyText((await defaultReceiveAddress(item)) || item.address).then(() => toast(t("toast.addressCopied")));
   });
   q("copyRecv").addEventListener("click", () => copyText(state.receiveAddress || currentItem().address).then(() => toast(t("toast.addressCopied"))));
   q("copyTx").addEventListener("click", () => copyText(q("statusDetail").textContent).then(() => toast(t("toast.txidCopied"))));
@@ -2301,6 +2847,8 @@ export function mountShell(document, {
   });
   q("statusHome").addEventListener("click", () => openHome());
   q("homeActivityAll").addEventListener("click", () => openActivity());
+  // Review must not beginReads() while presentSend's snapshot still holds the vault.
+  let sendPageWork = Promise.resolve();
   async function presentSend() {
     const item = currentItem();
     note("whoError", "");
@@ -2310,12 +2858,14 @@ export function mountShell(document, {
     q("availLine").textContent = state.balance == null ? t("home.avail.loading") : t("home.avail", { amount: pretty(state.balance) });
     q("toConfirm").textContent = t("action.review");
     syncSendCompose();
-    paintFeesLoading();
+    if (state.feeNote) paintFeesReady();
+    else paintFeesLoading();
     markFeeChoice(state.custom);
     paintCustomFeeEst();
     show("screen-send");
     try { q("sendTo").focus(); } catch { /* The test environment may have no focus. */ }
-    if (item?.address) {
+    const snapshotTask = (async () => {
+      if (!item?.address) return;
       beginReads();
       try {
         const snapshot = await loadWalletSnapshot(item, {
@@ -2328,17 +2878,10 @@ export function mountShell(document, {
       } catch {
         if (state.balance == null) q("availLine").textContent = t("home.avail.unavailable");
       }
-    }
-    try {
-      const fees = await estimateFees();
-      state.rates = fees.menu;
-      state.feeNote = fees.fallback
-        ? t("fee.note.fallback")
-        : t("fee.note.live");
-    } catch {
-      state.feeNote = t("fee.note.fallback");
-    }
-    if (state.screen === "screen-send") paintFeesReady();
+    })();
+    const feesTask = refreshFeeMenu({ paint: true });
+    sendPageWork = Promise.all([snapshotTask, feesTask]).then(() => {});
+    await sendPageWork;
   }
   q("goSend").addEventListener("click", async () => {
     const item = currentItem();
@@ -2408,6 +2951,7 @@ export function mountShell(document, {
     state.custom = false;
     q("feeCustom").open = false;
     markFeeChoice(false);
+    paintFeeSelected();
     rememberDraft();
   }));
   q("customFee").addEventListener("click", () => {
@@ -2416,6 +2960,7 @@ export function mountShell(document, {
       markFeeChoice(true);
     }
     paintCustomFeeEst();
+    paintFeeSelected();
     rememberDraft();
   });
   q("customRate").addEventListener("input", () => {
@@ -2427,6 +2972,7 @@ export function mountShell(document, {
       markFeeChoice(true);
     }
     paintCustomFeeEst();
+    paintFeeSelected();
     rememberDraft();
   });
   q("maxBtn").addEventListener("click", () => {
@@ -2459,10 +3005,12 @@ export function mountShell(document, {
     }
     if (item.kind === "watch") { note("sendError", t("send.watchNoSend")); show("screen-send"); return; }
     if (item.kind === "key") { note("sendError", t("send.keyNoSendDetail")); show("screen-send"); return; }
-    beginReads();
     q("toConfirm").disabled = true;
     q("toConfirm").textContent = t("send.preparing");
     try {
+      // Fees may finish before the send-page snapshot; wait so beginReads does not collide with vault work.
+      await sendPageWork.catch(() => {});
+      beginReads();
       if (!vault.status.unlocked) throw new Error(t("send.unlockFirst"));
       const { collected } = await collectSendUtxos(item);
       if (collected.length > 100) throw new Error(t("send.utxoCap"));
@@ -2751,6 +3299,9 @@ export function mountShell(document, {
     }
   });
   q("openRename").addEventListener("click", () => show("screen-rename"));
+  q("openAddresses").addEventListener("click", () => { void openAddressManager(); });
+  q("openStructure").addEventListener("click", () => { void openAccountStructure(); });
+  q("structureScan").addEventListener("click", () => { void scanAccountStructure(); });
   q("netPresetList").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-profile]");
     if (!button || button.dataset.busy === "1") return;
@@ -3143,7 +3694,7 @@ export function mountShell(document, {
     q("sendTo").value = draft.sendTo || "";
     q("sendAmount").value = draft.sendAmount || "";
     q("customRate").value = draft.customRate || "";
-    state.fee = draft.fee === "slow" || draft.fee === "fast" ? draft.fee : "standard";
+    state.fee = draft.fee === "slow" || draft.fee === "standard" ? draft.fee : "fast";
     state.custom = draft.custom === true;
     state.sendMax = draft.sendMax === true;
     if (q("feeCustom")) q("feeCustom").open = state.custom;
