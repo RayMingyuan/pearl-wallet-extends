@@ -36,6 +36,10 @@ npm run pack -- 1.0.0
 
 产物为 `artifacts/pearla-release-v1.0.0.zip`。压缩包根目录包含 `manifest.json`，可直接提交到 Chrome 应用商店，或解压后按上面的方式加载。
 
+## 设计说明
+
+- [收款地址交互](docs/receive-address.zh.md) — 为何插件固定首次收款地址，仅在收款页手动临时换址（与官方桌面钱包不同）。
+
 ## 开发
 
 运行全部测试：

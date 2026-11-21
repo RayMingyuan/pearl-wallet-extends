@@ -36,6 +36,10 @@ npm run pack -- 1.0.0
 
 The output is `artifacts/pearla-release-v1.0.0.zip`. `manifest.json` is at the root of the archive. Submit that zip to the Chrome Web Store, or unpack it and load it as above.
 
+## Design notes
+
+- [Receive address UX](docs/receive-address.md) — why the extension keeps a fixed first receive address and only rotates temporarily on the Receive page (unlike the official desktop wallet).
+
 ## Development
 
 Run the full test suite:

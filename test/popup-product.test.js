@@ -7,7 +7,10 @@ import { mountShell } from "../src/shell.js";
 const ADDRESS = "prl1psayn40fkp3f3szxztahxwszhyjfxe3u9tqxycujd6q2zcw4uc99sm7r4na";
 const CHANGE = "prl1pglwzxm30w89uhqqxj8x4phpf8c2jgl3x6kzdhj3m2hcy9d2fe7lqxn53yc";
 
-function mount(document, { vault, storage, fetchAddress, fetchUtxos, mainnetStore, fetchPearlUsdSpot, networkPrefs, applyNetworkPrefs }) {
+function mount(document, {
+  vault, storage, fetchAddress, fetchUtxos, mainnetStore, fetchPearlUsdSpot,
+  networkPrefs, applyNetworkPrefs, estimateFees,
+}) {
   return mountShell(document, {
     vault,
     storage,
@@ -18,6 +21,7 @@ function mount(document, { vault, storage, fetchAddress, fetchUtxos, mainnetStor
     fetchPearlUsdSpot: fetchPearlUsdSpot || null,
     networkPrefs,
     applyNetworkPrefs,
+    estimateFees,
     async copyText() {},
     async drawQr() {},
   });
@@ -233,11 +237,11 @@ test("home activity and send share change-address balance from one wallet snapsh
     customRate.dispatchEvent(new document.defaultView.Event("input"));
     assert.equal(customEst.hidden, false);
     assert.equal(customEst.textContent, "≈ 0.00018 PEARL");
-    assert.equal(document.getElementById("fee-standard").getAttribute("aria-checked"), "false");
+    assert.equal(document.getElementById("fee-fast").getAttribute("aria-checked"), "false");
     customRate.value = "";
     customRate.dispatchEvent(new document.defaultView.Event("input"));
     assert.equal(customEst.hidden, true);
-    assert.equal(document.getElementById("fee-standard").getAttribute("aria-checked"), "true");
+    assert.equal(document.getElementById("fee-fast").getAttribute("aria-checked"), "true");
   } finally {
     globalThis.document = previous;
   }
@@ -401,13 +405,21 @@ test("receive uses fresh home cursors without rescanning", async () => {
   }
 });
 
-test("stale receive scan updates address and toasts once", async () => {
+test("temporary receive skips locally cached used addresses without waiting on indexer", async () => {
   const FIRST = ADDRESS;
-  const NEXT = "prl1pglwzxm30w89uhqqxj8x4phpf8c2jgl3x6kzdhj3m2hcy9d2fe7lqxn53yc";
+  const SECOND = "prl1p3g3gq6f2mzke7f2vru90ep9erp9e6sgumrxw8akytd45s2zzctwsacrerl";
+  const THIRD = "prl1pegrplgs2f4d8e4qv425c946rtpg0dszjmuuahx5q4uw6tsdfysnqmufc97";
+  const byIndex = [FIRST, SECOND, THIRD];
   const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
   let unlocked = true;
-  let holdHome = true;
-  const homeWaits = [];
+  let book = {
+    current: "d0",
+    items: [{
+      id: "d0", name: "账户 1", kind: "derived", account: 0,
+      address: FIRST, receiveIndex: 1, changeIndex: 0, gapLimit: 2,
+    }],
+  };
+  let meta = { usedReceive: { "Pearl mainnet": { d0: [SECOND] } } };
   const previous = globalThis.document;
   globalThis.document = document;
   try {
@@ -416,7 +428,98 @@ test("stale receive scan updates address and toasts once", async () => {
         get status() { return { exists: true, unlocked, ready: true }; },
         async init() {},
         lock() { unlocked = false; },
-        async address(_branch, index) { return index === 0 ? FIRST : NEXT; },
+        async address(_branch, index) { return byIndex[index] || byIndex[byIndex.length - 1]; },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() { return structuredClone(book); },
+        async setBook(next) { book = structuredClone(next); },
+        async getIdle() { return null; },
+        async getMeta() { return structuredClone(meta); },
+        async setMeta(next) { meta = structuredClone(next); },
+      },
+      async fetchAddress() { return { balance: 0n, txCount: 0, activity: [] }; },
+    });
+    await app.ready;
+    await until(() => !document.getElementById("screen-home").hidden);
+
+    document.getElementById("goReceive").click();
+    await until(() => !document.getElementById("screen-receive").hidden);
+    document.getElementById("newRecv").click();
+    await until(() => document.getElementById("recvAddr").textContent.includes("fc97"));
+    assert.match(document.getElementById("recvAddr").textContent, /fc97/);
+    assert.equal(document.getElementById("recvAddr").textContent.includes("rerl"), false);
+    assert.ok(book.items[0].receiveIndex >= 2);
+    await app.ready.catch(() => {});
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("chain scan temporary receive errors when the unused window is saturated", async () => {
+  const FIRST = ADDRESS;
+  const byIndex = Array.from({ length: 40 }, (_, i) => `${FIRST.slice(0, -4)}${String(i).padStart(4, "0")}`);
+  byIndex[0] = FIRST;
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let unlocked = true;
+  let book = {
+    current: "d0",
+    items: [{
+      id: "d0", name: "账户 1", kind: "derived", account: 0,
+      address: FIRST, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+    }],
+  };
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked, ready: true }; },
+        async init() {},
+        lock() { unlocked = false; },
+        async address(_branch, index) { return byIndex[index] || `prl1pused${index}`; },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() { return structuredClone(book); },
+        async setBook(next) { book = structuredClone(next); },
+        async getIdle() { return null; },
+        async getMeta() { return {}; },
+        async setMeta() {},
+      },
+      async fetchAddress() { return { balance: 1n, txCount: 1, activity: [] }; },
+    });
+    await app.ready;
+    await until(() => !document.getElementById("screen-home").hidden);
+    document.getElementById("goReceive").click();
+    await until(() => !document.getElementById("screen-receive").hidden);
+    document.getElementById("newRecvScan").click();
+    await until(() => document.getElementById("qr-error").textContent.length > 0, 200);
+    assert.match(document.getElementById("qr-error").textContent, /未使用|unused|scan window|扫描窗口/i);
+    await app.ready.catch(() => {});
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("send fee cards use block targets and paint selected rate while snapshot loads", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let unlocked = true;
+  let holdSnapshot = false;
+  let releaseSnapshot;
+  let snapshotGate = Promise.resolve();
+  let feeCalls = 0;
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked, ready: true }; },
+        async init() {},
+        lock() { unlocked = false; },
+        async address() { return ADDRESS; },
         subscribe() { return () => {}; },
       },
       storage: {
@@ -426,39 +529,240 @@ test("stale receive scan updates address and toasts once", async () => {
             current: "d0",
             items: [{
               id: "d0", name: "账户 1", kind: "derived", account: 0,
-              address: FIRST, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+              address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
             }],
           };
         },
         async setBook() {},
         async getIdle() { return null; },
+        async getMeta() { return {}; },
+        async setMeta() {},
       },
-      async fetchAddress(address) {
-        if (holdHome) {
-          await new Promise((resolve) => homeWaits.push(resolve));
-        }
-        if (address === FIRST) return { balance: 1n, txCount: 1, activity: [] };
-        return { balance: 0n, activity: [] };
+      async fetchAddress() {
+        if (holdSnapshot) await snapshotGate;
+        return { balance: 2_644_204_300n, txCount: 1, activity: [] };
+      },
+      async estimateFees() {
+        feeCalls += 1;
+        return { menu: { slow: 1, standard: 2, fast: 50 }, fallback: false };
       },
     });
-    for (let i = 0; i < 40 && document.getElementById("screen-home").hidden; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    // Opening receive before the home scan is marked fresh should rescan in the background and prompt an address change.
-    holdHome = false;
-    document.getElementById("goReceive").click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(document.getElementById("screen-receive").hidden, false);
-    for (const release of homeWaits.splice(0)) release();
-    for (let i = 0; i < 80 && !/new receive address|新的收款地址/.test(document.getElementById("toast").textContent); i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.match(document.getElementById("recvAddr").textContent, /xn53yc/);
-    assert.match(document.getElementById("toast").textContent, /Switched to a new receive address|已换到新的收款地址/);
-    assert.equal(document.getElementById("toast").hidden, false);
+    await app.ready;
+    await until(() => !document.getElementById("screen-home").hidden);
+    holdSnapshot = true;
+    snapshotGate = new Promise((resolve) => { releaseSnapshot = resolve; });
+    document.getElementById("goSend").click();
+    await until(() => !document.getElementById("screen-send").hidden);
+    await until(() => /50 grain\/vB/.test(document.getElementById("feeSelected").textContent || ""));
+    assert.ok(feeCalls >= 1);
+    assert.equal(document.getElementById("fee-fast").getAttribute("aria-checked"), "true");
+    assert.match(document.getElementById("fee-fast").textContent, /1 block|1 块/);
+    assert.match(document.getElementById("fee-standard").textContent, /10/);
+    assert.match(document.getElementById("fee-slow").textContent, /25/);
+    assert.equal(document.querySelector(".fees").classList.contains("is-loading"), false);
+    // Fees must finish even while the send-page snapshot refresh is still gated.
+    assert.equal(holdSnapshot, true);
+    releaseSnapshot();
+    await until(() => document.getElementById("availLine").textContent.includes("26.442043"));
     await app.ready.catch(() => {});
   } finally {
-    for (const release of homeWaits.splice(0)) release();
+    globalThis.document = previous;
+  }
+});
+
+test("settings account structure lists receive and change from local cursors", async () => {
+  const FIRST = ADDRESS;
+  const SECOND = "prl1p3g3gq6f2mzke7f2vru90ep9erp9e6sgumrxw8akytd45s2zzctwsacrerl";
+  const CHANGE0 = "prl1pegrplgs2f4d8e4qv425c946rtpg0dszjmuuahx5q4uw6tsdfysnqmufc97";
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let unlocked = true;
+  let book = {
+    current: "d0",
+    items: [{
+      id: "d0", name: "账户 1", kind: "derived", account: 0,
+      address: FIRST, receiveIndex: 1, changeIndex: 0, gapLimit: 2,
+    }],
+  };
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked, ready: true }; },
+        async init() {},
+        lock() { unlocked = false; },
+        async address(branch, index) {
+          if (branch === 1) return CHANGE0;
+          return index === 0 ? FIRST : SECOND;
+        },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() { return structuredClone(book); },
+        async setBook(next) { book = structuredClone(next); },
+        async getIdle() { return null; },
+        async getMeta() { return {}; },
+        async setMeta() {},
+      },
+      async fetchAddress() { return { balance: 0n, txCount: 0, activity: [] }; },
+    });
+    await app.ready;
+    await until(() => !document.getElementById("screen-home").hidden);
+    document.querySelector('#bottomNav button[data-tab="screen-settings"]').click();
+    await until(() => !document.getElementById("screen-settings").hidden);
+    document.getElementById("openStructure").click();
+    await until(() => !document.getElementById("screen-structure").hidden);
+    await until(() => document.getElementById("structureReceiveList").children.length >= 2);
+    assert.equal(document.getElementById("structureReceiveList").children.length, 2);
+    assert.equal(document.getElementById("structureChangeList").children.length, 1);
+    assert.match(document.getElementById("structureChangeList").textContent, /Change #0|找零 #0/);
+    assert.equal(document.getElementById("structureScan").hidden, false);
+    await app.ready.catch(() => {});
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("settings lists known receive addresses and Receive can pick one temporarily", async () => {
+  const FIRST = ADDRESS;
+  const SECOND = "prl1p3g3gq6f2mzke7f2vru90ep9erp9e6sgumrxw8akytd45s2zzctwsacrerl";
+  const byIndex = [FIRST, SECOND];
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let unlocked = true;
+  let book = {
+    current: "d0",
+    items: [{
+      id: "d0", name: "账户 1", kind: "derived", account: 0,
+      address: FIRST, receiveIndex: 1, changeIndex: 0, gapLimit: 2,
+    }],
+  };
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked, ready: true }; },
+        async init() {},
+        lock() { unlocked = false; },
+        async address(_branch, index) { return byIndex[index] || byIndex[byIndex.length - 1]; },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() { return structuredClone(book); },
+        async setBook(next) { book = structuredClone(next); },
+        async getIdle() { return null; },
+        async getMeta() { return {}; },
+        async setMeta() {},
+      },
+      async fetchAddress() { return { balance: 0n, txCount: 0, activity: [] }; },
+    });
+    await app.ready;
+    await until(() => !document.getElementById("screen-home").hidden);
+
+    document.querySelector('#bottomNav button[data-tab="screen-settings"]').click();
+    await until(() => !document.getElementById("screen-settings").hidden);
+    document.getElementById("openAddresses").click();
+    await until(() => !document.getElementById("screen-addresses").hidden);
+    await until(() => document.getElementById("addressManageList").children.length >= 2);
+    assert.equal(document.getElementById("addressManageList").children.length, 2);
+
+    document.querySelector('#bottomNav button[data-tab="screen-home"]').click();
+    await until(() => !document.getElementById("screen-home").hidden);
+    document.getElementById("goReceive").click();
+    await until(() => !document.getElementById("screen-receive").hidden);
+    document.getElementById("pickRecv").click();
+    await until(() => !document.getElementById("recvPickSheet").hidden);
+    const pickButtons = [...document.querySelectorAll("#recvPickList .addr-row-main")];
+    assert.equal(pickButtons.length, 2);
+    pickButtons[1].click();
+    await until(() => document.getElementById("recvAddr").textContent.includes("rerl"));
+    assert.match(document.getElementById("recvAddr").textContent, /rerl/);
+    assert.equal(document.getElementById("recvTempHint").hidden, false);
+    assert.match(document.getElementById("recvTempHint").textContent, /Temporary chosen|已选用/);
+    await until(() => /Temporary address selected|已选用临时地址/.test(document.getElementById("toast").textContent));
+    assert.match(document.getElementById("toast").textContent, /Temporary address selected|已选用临时地址/);
+
+    document.querySelector('#bottomNav button[data-tab="screen-home"]').click();
+    await until(() => document.getElementById("homeAddr").textContent === FIRST);
+    assert.equal(document.getElementById("homeAddr").textContent, FIRST);
+    await app.ready.catch(() => {});
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("Receive stays on the first address; new address is temporary only", async () => {
+  const FIRST = ADDRESS;
+  const SECOND = "prl1p3g3gq6f2mzke7f2vru90ep9erp9e6sgumrxw8akytd45s2zzctwsacrerl";
+  const THIRD = "prl1pegrplgs2f4d8e4qv425c946rtpg0dszjmuuahx5q4uw6tsdfysnqmufc97";
+  const byIndex = [FIRST, SECOND, THIRD];
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let unlocked = true;
+  let book = {
+    current: "d0",
+    items: [{
+      id: "d0", name: "账户 1", kind: "derived", account: 0,
+      address: FIRST, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+    }],
+  };
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked, ready: true }; },
+        async init() {},
+        lock() { unlocked = false; },
+        async address(_branch, index) { return byIndex[index] || byIndex[byIndex.length - 1]; },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() { return structuredClone(book); },
+        async setBook(next) { book = structuredClone(next); },
+        async getIdle() { return null; },
+      },
+      async fetchAddress() { return { balance: 0n, txCount: 0, activity: [] }; },
+    });
+    await app.ready;
+    await until(() => !document.getElementById("screen-home").hidden);
+
+    document.getElementById("goReceive").click();
+    await until(() => !document.getElementById("screen-receive").hidden);
+    await until(() => document.getElementById("recvAddr").textContent.includes("sm7r4na"));
+    assert.match(document.getElementById("recvAddr").textContent, /sm7r4na/);
+    assert.equal(document.getElementById("recvTools").hidden, false);
+    assert.equal(document.getElementById("newRecv").hidden, false);
+    assert.equal(document.getElementById("newRecvScan").hidden, false);
+    assert.equal(document.getElementById("recvTempHint").hidden, true);
+
+    document.getElementById("newRecv").click();
+    await until(() => document.getElementById("recvAddr").textContent.includes("rerl"));
+    assert.match(document.getElementById("recvAddr").textContent, /rerl/);
+    assert.equal(document.getElementById("recvTempHint").hidden, false);
+    assert.match(document.getElementById("toast").textContent, /Temporary address ready \(local\)|已显示临时地址（本地）/);
+    assert.match(document.getElementById("recvTempHint").textContent, /local cache|本地缓存/);
+    assert.equal(book.items[0].receiveIndex, 1);
+
+    document.getElementById("newRecv").click();
+    await until(() => document.getElementById("recvAddr").textContent.includes("fc97"));
+    assert.match(document.getElementById("recvAddr").textContent, /fc97/);
+    assert.equal(book.items[0].receiveIndex, 2);
+
+    document.querySelector('#bottomNav button[data-tab="screen-home"]')?.click();
+    await until(() => !document.getElementById("screen-home").hidden);
+    await until(() => document.getElementById("homeAddr").textContent === FIRST);
+    assert.equal(document.getElementById("homeAddr").textContent, FIRST);
+    assert.equal(document.getElementById("switchAddr").textContent, `${FIRST.slice(0, 6)}…${FIRST.slice(-4)}`);
+
+    document.getElementById("goReceive").click();
+    await until(() => document.getElementById("recvAddr").textContent.includes("sm7r4na"));
+    assert.match(document.getElementById("recvAddr").textContent, /sm7r4na/);
+    assert.equal(document.getElementById("recvTempHint").hidden, true);
+    await app.ready.catch(() => {});
+  } finally {
     globalThis.document = previous;
   }
 });
