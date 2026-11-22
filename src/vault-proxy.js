@@ -51,7 +51,11 @@ export function createVaultProxy({ send, idleMs = 5 * 60 * 1000, network = "Pear
     addPrivateKey(password, key, id) { return call("addPrivateKey", { password, key, id }); },
     changePassword(current, nextPassword) { return call("changePassword", { current, nextPassword }); },
     remove(password) { return call("remove", { password }); },
-    signTransaction(draft, password) { return call("signTransaction", { draft, password }); },
+    sendAuthStatus() { return call("sendAuthStatus"); },
+    clearSendAuth() { return call("clearSendAuth"); },
+    signTransaction(draft, password, { rememberMins = 0 } = {}) {
+      return call("signTransaction", { draft, password, rememberMins });
+    },
     mnemonic(password) { return call("mnemonic", { password }); },
     importedKeys() { return call("importedKeys"); },
   };

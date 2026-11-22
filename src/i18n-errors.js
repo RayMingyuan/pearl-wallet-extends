@@ -185,7 +185,7 @@ export const errorCatalogEn = {
   "err.provider.missingPsbt": "PSBT is missing",
   "err.provider.unsupported": "Unsupported web provider method",
   "err.spend.lockIdInvalid": "Spend lock ID is invalid",
-  "err.spend.pendingConflict": "This input is still pending — cannot build a conflicting transaction. Check status first.",
+  "err.spend.pendingConflict": "The previous send is still confirming — that balance is not available yet.",
   "err.descriptor.unencodable": "Descriptor contains a character that cannot be encoded",
   "err.internal.missingDomNode": "Missing UI node {id}"
 };
@@ -375,7 +375,7 @@ export const errorCatalogZh = {
   "err.provider.missingPsbt": "缺少 PSBT",
   "err.provider.unsupported": "不支持的网页接口",
   "err.spend.lockIdInvalid": "花费锁定标识无效",
-  "err.spend.pendingConflict": "这笔输入还在等待上链结果，不能另组冲突交易。请先查证状态。",
+  "err.spend.pendingConflict": "上一笔还在确认，暂不可用同一笔余额",
   "err.descriptor.unencodable": "描述符里有不能编码的字符",
   "err.internal.missingDomNode": "缺少界面节点 {id}"
 };

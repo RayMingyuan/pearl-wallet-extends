@@ -38,13 +38,14 @@ function draftStore(initial = null) {
   };
 }
 
-function mount(document, { vault, storage, estimateFees }) {
+function mount(document, { vault, storage, estimateFees, broadcaster, spendGuard }) {
   return mountShell(document, {
     vault,
     storage,
     async fetchAddress() { return { balance: 0n, txCount: 0, activity: [] }; },
     async fetchUtxos() { return []; },
-    broadcaster: {},
+    broadcaster: broadcaster || {},
+    spendGuard,
     estimateFees: estimateFees || (async () => ({ menu: { slow: 1, standard: 2, fast: 3 }, fallback: true })),
     async copyText() {},
     async drawQr() {},
@@ -521,6 +522,79 @@ test("page drafts keep public fields and drop secrets", () => {
   assert.equal(change.flow, "pwchange");
   assert.equal(change.password, undefined);
   assert.equal(change.pw1, undefined);
+});
+
+test("successful broadcast clears the send form so the next send starts blank", async () => {
+  const drafts = draftStore();
+  const book = {
+    current: "d0",
+    items: [{
+      id: "d0", name: "Account 1", kind: "derived", account: 0,
+      address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 1,
+    }],
+  };
+  const document = freshDocument();
+  let unlocked = true;
+  const app = mount(document, {
+    vault: {
+      get status() { return { exists: true, unlocked, ready: true }; },
+      async init() {},
+      lock() { unlocked = false; },
+      async address() { return ADDRESS; },
+      async sendAuthStatus() { return { active: true }; },
+      async signTransaction() { return { txid: TXID, rawHex: "00" }; },
+      subscribe() { return () => {}; },
+    },
+    storage: {
+      ...drafts,
+      async getVault() { return { version: 2 }; },
+      async getBook() { return book; },
+      async setBook() {},
+    },
+    broadcaster: {
+      async submit() {
+        return { status: "broadcast", txid: TXID, confirmations: 0, endpoint: "", network: "Pearl mainnet" };
+      },
+    },
+    spendGuard: {
+      async assertAvailable() {},
+      async pin() {},
+      async releaseTxid() {},
+      async list() { return []; },
+      async excludeLocked(inputs) { return inputs; },
+    },
+  });
+  await app.ready;
+  document.getElementById("goSend").click();
+  await until(() => document.getElementById("screen-send").hidden === false);
+  document.getElementById("sendTo").value = ADDRESS;
+  document.getElementById("sendAmount").value = "0.5";
+  document.getElementById("customRate").value = "100";
+  document.getElementById("customRate").dispatchEvent(new document.defaultView.Event("input"));
+  app.state.draft = {
+    inputs: [{ txid: "11".repeat(32), vout: 0 }],
+    payment: "50000000",
+    fee: "1000",
+    changeIndex: 0,
+    sourceAddress: ADDRESS,
+    changeAddress: ADDRESS,
+  };
+  document.getElementById("confirmSend").click();
+  assert.equal(await until(() => document.getElementById("screen-status").hidden === false), true);
+  assert.equal(document.getElementById("statusDetail").textContent, TXID);
+  assert.equal(document.getElementById("sendTo").value, "");
+  assert.equal(document.getElementById("sendAmount").value, "");
+  assert.equal(document.getElementById("customRate").value, "");
+
+  document.getElementById("statusHome").click();
+  assert.equal(await until(() => document.getElementById("screen-home").hidden === false), true);
+  document.getElementById("goSend").click();
+  await until(() => document.getElementById("screen-send").hidden === false);
+  assert.equal(document.getElementById("sendTo").value, "");
+  assert.equal(document.getElementById("sendAmount").value, "");
+  assert.equal(document.getElementById("customRate").value, "");
+  // A blank send shell may still be draft-captured; it must not revive the prior payment.
+  assert.equal(await until(() => drafts.getPopupDraft().then((draft) => !draft?.sendTo && !draft?.sendAmount)), true);
 });
 
 test("broadcast result and transaction detail return, then leave when the page is closed", async () => {

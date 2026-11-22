@@ -19,7 +19,9 @@ function publicDirectory(directory) {
   };
 }
 
-export function createVaultSession({ idleMs, network } = {}) {
+export function createVaultSession({
+  idleMs, network, now = Date.now, schedule = setTimeout, cancel = clearTimeout,
+} = {}) {
   let record = null;
   let dirty = false;
   const storage = {
@@ -28,7 +30,7 @@ export function createVaultSession({ idleMs, network } = {}) {
     async removeVault() { record = null; dirty = true; },
   };
   const locks = { request(_name, _options, work) { return work(); } };
-  const vault = createVault({ storage, locks, idleMs, network });
+  const vault = createVault({ storage, locks, idleMs, network, now, schedule, cancel });
   return {
     vault,
     replaceRecord(next) {
@@ -46,7 +48,8 @@ export function createVaultSession({ idleMs, network } = {}) {
 export async function dispatchVault(session, message) {
   const { vault } = session;
   try {
-    if (!vault.status.unlocked) {
+    // A send ticket keeps the seed while the UI is locked. Re-init would wipe that seed.
+    if (!vault.status.unlocked && !vault.status.sendAuth) {
       if (message && Object.prototype.hasOwnProperty.call(message, "record")) session.replaceRecord(message.record);
       await vault.init();
     }
@@ -68,12 +71,30 @@ export async function dispatchVault(session, message) {
     else if (op === "noteBook") await vault.noteBook(message.book, message.password);
     else if (op === "commitBook") await vault.commitBook(message.password, message.book);
     else if (op === "addPrivateKey") result = await vault.addPrivateKey(message.password, message.key, message.id);
-    else if (op === "changePassword") await vault.changePassword(message.current, message.nextPassword);
+    else if (op === "changePassword") {
+      vault.clearSendTicket();
+      await vault.changePassword(message.current, message.nextPassword);
+    }
     else if (op === "remove") {
       await vault.verifyPassword(message.password);
+      vault.clearSendTicket();
       await vault.remove();
+    } else if (op === "sendAuthStatus") {
+      result = { active: vault.status.sendAuth === true };
+    } else if (op === "clearSendAuth") {
+      vault.clearSendTicket();
+      result = null;
     } else if (op === "signTransaction") {
-      await vault.verifyPassword(message.password);
+      const rememberMins = Number.isInteger(message.rememberMins) && message.rememberMins > 0
+        ? message.rememberMins
+        : 0;
+      const password = typeof message.password === "string" ? message.password : "";
+      if (!vault.status.sendAuth) {
+        if (!password) throw err("err.vault.unlockConfirmDraft");
+        if (!vault.status.unlocked) await vault.unlock(password);
+        else await vault.verifyPassword(password);
+      }
+      if (rememberMins > 0) vault.armSendTicket(rememberMins);
       result = vault.signTransaction(message.draft);
     } else if (op === "mnemonic") {
       await vault.verifyPassword(message.password);

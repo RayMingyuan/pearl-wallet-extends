@@ -3,9 +3,24 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parseHTML } from "linkedom";
 import { mountShell } from "../src/shell.js";
+import { decodeTransaction, taprootScript } from "../src/transaction.js";
 
 const ADDRESS = "prl1psayn40fkp3f3szxztahxwszhyjfxe3u9tqxycujd6q2zcw4uc99sm7r4na";
 const CHANGE = "prl1pglwzxm30w89uhqqxj8x4phpf8c2jgl3x6kzdhj3m2hcy9d2fe7lqxn53yc";
+
+function fundedUtxo(address, value = 199_139_538) {
+  const amount = Buffer.alloc(8);
+  amount.writeBigUInt64LE(BigInt(value));
+  const outpoint = "22".repeat(32) + "00000000";
+  const raw = `0200000001${outpoint}00ffffffff01${amount.toString("hex")}22${taprootScript(address)}00000000`;
+  return {
+    txid: decodeTransaction(raw).txid,
+    vout: 0,
+    value: String(value),
+    confirmations: 2,
+    prevTxHex: raw,
+  };
+}
 
 function mount(document, {
   vault, storage, fetchAddress, fetchUtxos, mainnetStore, fetchPearlUsdSpot,
@@ -67,11 +82,11 @@ test("home fiat stays on loading until price resolves, never flashes no-quote", 
   assert.ok(!seenFiat.includes("No USD quote yet"));
   assert.ok(!seenFiat.includes("总价值暂无报价"));
   releasePrice();
-  await until(() => fiat.textContent === "$2.50");
+  await until(() => fiat.textContent === "≈ $2.50");
   clearInterval(sample);
   assert.ok(!seenFiat.includes("No USD quote yet"));
   assert.ok(!seenFiat.includes("总价值暂无报价"));
-  assert.equal(fiat.textContent, "$2.50");
+  assert.equal(fiat.textContent, "≈ $2.50");
 });
 
 test("a watch-only book reopens on home and hiding the balance does not query again", async () => {
@@ -104,12 +119,12 @@ test("a watch-only book reopens on home and hiding the balance does not query ag
   for (let i = 0; i < 40 && document.getElementById("homeBalance").textContent === "Loading…"; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  await until(() => document.getElementById("homeFiat").textContent === "$2.50");
+  await until(() => document.getElementById("homeFiat").textContent === "≈ $2.50");
   assert.equal(document.getElementById("screen-home").hidden, false);
   assert.equal(document.getElementById("screen-welcome").hidden, true);
   assert.equal(document.getElementById("homeBalance").textContent, "1.25");
   assert.equal(document.getElementById("homeFiat").hidden, false);
-  assert.equal(document.getElementById("homeFiat").textContent, "$2.50");
+  assert.equal(document.getElementById("homeFiat").textContent, "≈ $2.50");
   assert.match(document.getElementById("homeSpot").textContent, /Spot \$2\.00 · Coinbase/);
   assert.equal(document.getElementById("goSend").disabled, true);
   assert.equal(document.getElementById("accountKind").hidden, false);
@@ -121,14 +136,80 @@ test("a watch-only book reopens on home and hiding the balance does not query ag
   document.getElementById("hideBalance").click();
   assert.equal(document.getElementById("homeBalance").textContent, "••••");
   assert.equal(document.getElementById("homeFiat").textContent, "••••");
-  assert.equal(document.getElementById("homeSpot").textContent, "••••");
+  assert.match(document.getElementById("homeSpot").textContent, /Spot \$2\.00 · Coinbase/);
   assert.equal(document.getElementById("hideBalance").getAttribute("aria-pressed"), "true");
   assert.equal(queries, seen);
   assert.equal(priceQueries, prices);
   document.getElementById("hideBalance").click();
   assert.equal(document.getElementById("homeBalance").textContent, "1.25");
-  assert.equal(document.getElementById("homeFiat").textContent, "$2.50");
+  assert.equal(document.getElementById("homeFiat").textContent, "≈ $2.50");
   assert.equal(queries, seen);
+});
+
+test("watch-only settings disable vault actions and keep rename, network, and about", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const WATCH = "prl1penz3j6q2rvnh02axv4ysxp6z789qtteezuq0jnm2nr5w562uaywqp6a2pw";
+  const blocked = ["viewSeed", "openPw", "openIdle", "openAddresses", "openAccountsPreview", "removeVault"];
+  const kept = ["openRename", "openNet", "openPrivacy", "openDonate", "openSite", "openSource", "checkUpdate"];
+  const app = mount(document, {
+    vault: {
+      get status() { return { exists: true, unlocked: true, ready: true }; },
+      async init() {},
+      async address() { return ADDRESS; },
+      subscribe() { return () => {}; },
+    },
+    storage: {
+      async getVault() { return { version: 2 }; },
+      async getBook() {
+        return {
+          current: "w1",
+          items: [
+            { id: "d0", name: "Main", kind: "derived", account: 0, address: ADDRESS, receiveIndex: 0, changeIndex: 0 },
+            { id: "w1", name: "观察地址", kind: "watch", address: WATCH },
+          ],
+        };
+      },
+      async setBook() {},
+      async getIdle() { return null; },
+    },
+    async fetchAddress() { return { balance: 0n, activity: [] }; },
+  });
+  await app.ready;
+  await until(() => !document.getElementById("screen-home").hidden);
+  document.querySelector('#bottomNav button[data-tab="screen-settings"]').click();
+  await until(() => !document.getElementById("screen-settings").hidden);
+  for (const id of blocked) {
+    const el = document.getElementById(id);
+    assert.equal(el.disabled, true, id);
+    assert.equal(el.title, "Not available for a watch-only address");
+  }
+  for (const id of kept) assert.equal(document.getElementById(id).disabled, false, id);
+  document.getElementById("viewSeed").click();
+  assert.equal(document.getElementById("screen-secret").hidden, true);
+  document.getElementById("removeVault").click();
+  assert.equal(document.getElementById("screen-remove").hidden, true);
+  document.getElementById("openRename").click();
+  assert.equal(document.getElementById("screen-rename").hidden, false);
+
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    document.querySelector('#bottomNav button[data-tab="screen-home"]').click();
+    await until(() => !document.getElementById("screen-home").hidden);
+    document.getElementById("accountSwitch").click();
+    const main = [...document.querySelectorAll(".acct-main")].find((btn) => btn.textContent.includes("Main"));
+    main.click();
+    await until(() => document.getElementById("switchName").textContent === "Main");
+    document.querySelector('#bottomNav button[data-tab="screen-settings"]').click();
+    await until(() => !document.getElementById("screen-settings").hidden);
+    for (const id of blocked) {
+      const el = document.getElementById(id);
+      assert.equal(el.disabled, false, id);
+      assert.equal(el.title, "");
+    }
+  } finally {
+    globalThis.document = previous;
+  }
 });
 
 test("home activity and send share change-address balance from one wallet snapshot", async () => {
@@ -214,8 +295,8 @@ test("home activity and send share change-address balance from one wallet snapsh
       },
     });
     await app.ready;
-    await until(() => document.getElementById("homeBalance").textContent === "1.9914");
-    assert.equal(document.getElementById("homeBalance").textContent, "1.9914");
+    await until(() => document.getElementById("homeBalance").textContent === "1.99139538");
+    assert.equal(document.getElementById("homeBalance").textContent, "1.99139538");
     assert.equal(queried.includes(CHANGE), true);
     assert.match(document.getElementById("homeTx").textContent, /−2/);
     assert.match(document.getElementById("homeTx").textContent, /PEARL/);
@@ -959,6 +1040,53 @@ test("account sheet can remove a watch address after confirm tap", async () => {
   }
 });
 
+test("watch-only drawer offers create and import until a wallet exists", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: false, unlocked: false, ready: true }; },
+        async init() {},
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return null; },
+        async getBook() {
+          return { current: "w1", items: [{ id: "w1", name: "观察地址", kind: "watch", address: ADDRESS }] };
+        },
+        async setBook() {},
+      },
+      async fetchAddress() { return { balance: 0n, activity: [] }; },
+    });
+    await app.ready;
+    await until(() => !document.getElementById("screen-home").hidden);
+    document.getElementById("accountSwitch").click();
+    assert.equal(document.getElementById("addDerived").hidden, true);
+    assert.equal(document.getElementById("sheetCreate").hidden, false);
+    assert.equal(document.getElementById("sheetImport").hidden, false);
+    assert.equal(document.getElementById("addMenuWatch").hidden, false);
+    assert.match(document.getElementById("accountSheetHint").textContent, /No wallet on this device yet/);
+    document.getElementById("addDerived").click();
+    assert.equal(document.getElementById("screen-account-pw").hidden, true);
+    document.getElementById("sheetCreate").click();
+    await until(() => !document.getElementById("screen-password").hidden);
+    assert.equal(document.getElementById("screen-password").hidden, false);
+    assert.equal(document.getElementById("screen-account-pw").hidden, true);
+    assert.equal(document.querySelector("#screen-password [data-back]").dataset.back, "screen-home");
+    document.querySelector("#screen-password [data-back]").click();
+    await until(() => !document.getElementById("screen-home").hidden);
+    document.getElementById("accountSwitch").click();
+    document.getElementById("sheetImport").click();
+    await until(() => !document.getElementById("screen-import").hidden);
+    assert.equal(document.getElementById("screen-import").hidden, false);
+    assert.equal(document.querySelector("#screen-import [data-back]").dataset.back, "screen-home");
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
 test("account sheet watch-only opens without private-key import", async () => {
   const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
   let unlocked = true;
@@ -994,6 +1122,9 @@ test("account sheet watch-only opens without private-key import", async () => {
     assert.equal(document.getElementById("addMenuImport"), null);
     assert.equal(document.getElementById("chooseKey"), null);
     document.getElementById("accountSwitch").click();
+    assert.equal(document.getElementById("addDerived").hidden, false);
+    assert.equal(document.getElementById("sheetCreate").hidden, true);
+    assert.equal(document.getElementById("sheetImport").hidden, true);
     document.getElementById("addMenuWatch").click();
     assert.equal(document.getElementById("screen-watch").hidden, false);
     assert.equal(document.getElementById("screen-watch").querySelector("[data-back]").dataset.back, "screen-home");
@@ -1105,7 +1236,139 @@ test("a wallet-less welcome screen can switch networks and come back", async () 
   assert.equal(document.getElementById("welcomeNetLabel").textContent, "Mainnet");
 });
 
-test("home paints balance before a slow gap rescan finishes", async () => {
+test("a fast settings-activity-home switch does not publish an aborted partial total", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const CHANGE0 = "prl1pya7e4s6kl2tpf5awz34687j6cngw0lgrqd3qq927w2qzusxmgcgs4yad5m";
+  const CHANGE1 = "prl1pvdtcl546a64kk9p06nc75vrwlqfrl3m9myhl07wd69zvfma6fq3q9aduze";
+  let change1Fetches = 0;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const seen = [];
+  const sample = setInterval(() => {
+    const text = document.getElementById("homeBalance").textContent;
+    if (seen[seen.length - 1] !== text) seen.push(text);
+  }, 5);
+  const app = mount(document, {
+    vault: {
+      get status() { return { exists: true, unlocked: true, ready: true }; },
+      async init() {},
+      async address(branch, index) {
+        if (branch === 0 && index === 0) return ADDRESS;
+        if (branch === 1 && index === 0) return CHANGE0;
+        if (branch === 1 && index === 1) return CHANGE1;
+        return `unused-${branch}-${index}`;
+      },
+      subscribe() { return () => {}; },
+    },
+    storage: {
+      async getVault() { return { version: 2 }; },
+      async getBook() {
+        return {
+          current: "d0",
+          items: [{
+            id: "d0", name: "Account 1", kind: "derived", account: 0,
+            address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+          }],
+        };
+      },
+      async setBook() {},
+      async getMeta() { return null; },
+      async setMeta() {},
+    },
+    async fetchAddress(address, { signal } = {}) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (address === CHANGE1) {
+        change1Fetches += 1;
+        // The used-probe returns immediately. The later balance fetch stays open so a tab
+        // switch can abort it after the receive address has already answered.
+        if (change1Fetches > 1) {
+          await held;
+          if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+        }
+      }
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (address === ADDRESS) return { balance: 630000000n, txCount: 1, activity: [] };
+      if (address === CHANGE1) return { balance: 2110000000n, txCount: 1, activity: [] };
+      return { balance: 0n, txCount: 0, activity: [] };
+    },
+  });
+  try {
+    await until(() => change1Fetches >= 2);
+    document.querySelector('#bottomNav button[data-tab="screen-settings"]').click();
+    document.querySelector('#bottomNav button[data-tab="screen-activity"]').click();
+    await until(() => document.getElementById("screen-activity").hidden === false);
+    document.querySelector('#bottomNav button[data-tab="screen-home"]').click();
+    await until(() => document.getElementById("screen-home").hidden === false);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(document.getElementById("homeBalance").textContent, "Loading…");
+    release();
+    await until(() => document.getElementById("homeBalance").textContent === "27.4");
+    await app.ready.catch(() => {});
+    assert.equal(document.getElementById("homeBalance").textContent, "27.4");
+    assert.equal(seen.includes("6.3"), false);
+  } finally {
+    clearInterval(sample);
+    release();
+  }
+});
+
+test("activity back to home does not flash the cursor-window total", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const CHANGE0 = "prl1pya7e4s6kl2tpf5awz34687j6cngw0lgrqd3qq927w2qzusxmgcgs4yad5m";
+  const CHANGE1 = "prl1pvdtcl546a64kk9p06nc75vrwlqfrl3m9myhl07wd69zvfma6fq3q9aduze";
+  const seen = [];
+  const sample = setInterval(() => {
+    const text = document.getElementById("homeBalance").textContent;
+    if (seen[seen.length - 1] !== text) seen.push(text);
+  }, 5);
+  const app = mount(document, {
+    vault: {
+      get status() { return { exists: true, unlocked: true, ready: true }; },
+      async init() {},
+      async address(branch, index) {
+        if (branch === 0 && index === 0) return ADDRESS;
+        if (branch === 1 && index === 0) return CHANGE0;
+        if (branch === 1 && index === 1) return CHANGE1;
+        return `unused-${branch}-${index}`;
+      },
+      subscribe() { return () => {}; },
+    },
+    storage: {
+      async getVault() { return { version: 2 }; },
+      async getBook() {
+        return {
+          current: "d0",
+          items: [{
+            id: "d0", name: "Account 1", kind: "derived", account: 0,
+            address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+          }],
+        };
+      },
+      async setBook() {},
+      async getMeta() { return null; },
+      async setMeta() {},
+    },
+    async fetchAddress(address) {
+      if (address === ADDRESS) return { balance: 630000000n, txCount: 1, activity: [] };
+      if (address === CHANGE1) return { balance: 2110000000n, txCount: 1, activity: [] };
+      return { balance: 0n, txCount: 0, activity: [] };
+    },
+  });
+  try {
+    await until(() => document.getElementById("screen-home").hidden === false);
+    document.querySelector('#bottomNav button[data-tab="screen-activity"]').click();
+    await until(() => document.getElementById("screen-activity").hidden === false);
+    document.querySelector('#bottomNav button[data-tab="screen-home"]').click();
+    await until(() => document.getElementById("homeBalance").textContent === "27.4");
+    await app.ready;
+    assert.equal(document.getElementById("homeBalance").textContent, "27.4");
+    assert.equal(seen.includes("6.3"), false);
+  } finally {
+    clearInterval(sample);
+  }
+});
+
+test("home stays on loading until the gap total instead of painting a partial sum", async () => {
   const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
   let releaseScan;
   const scanGate = new Promise((resolve) => { releaseScan = resolve; });
@@ -1150,13 +1413,13 @@ test("home paints balance before a slow gap rescan finishes", async () => {
       return { balance: 0n, activity: [], txCount: 0 };
     },
   });
-  // ready awaits the full gap rescan; assert the early balance paint before releasing it.
-  await until(() => document.getElementById("homeBalance").textContent === "2.5");
-  assert.equal(document.getElementById("homeBalance").textContent, "2.5");
-  assert.equal(document.getElementById("balanceCard").classList.contains("soft-refresh"), true);
+  // The cursor-window sum must not flash. The hero stays loading until the held gap scan returns.
+  await until(() => document.getElementById("screen-home").hidden === false);
+  assert.equal(document.getElementById("homeBalance").textContent, "Loading…");
   releaseScan();
   await app.ready;
-  await until(() => document.getElementById("balanceCard").classList.contains("soft-refresh") === false);
+  await until(() => document.getElementById("homeBalance").textContent === "2.5");
+  assert.equal(document.getElementById("balanceCard").classList.contains("soft-refresh"), false);
   assert.equal(document.getElementById("homeBalance").textContent, "2.5");
 });
 
@@ -1388,5 +1651,257 @@ test("settings shows manifest version and can check for updates", async () => {
     assert.equal(reloads, 1);
   } finally {
     globalThis.chrome = previousChrome;
+  }
+});
+
+test("send page paints available balance without waiting on a gap rescan", async () => {
+  const RECV = ADDRESS;
+  const CHANGE0 = "prl1pya7e4s6kl2tpf5awz34687j6cngw0lgrqd3qq927w2qzusxmgcgs4yad5m";
+  const RECV1 = "prl1pvdtcl546a64kk9p06nc75vrwlqfrl3m9myhl07wd69zvfma6fq3q9aduze";
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let unlocked = true;
+  let releaseGap;
+  const gapGate = new Promise((resolve) => { releaseGap = resolve; });
+  let gapProbesDuringSend = 0;
+  let sendOpened = false;
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked, ready: true }; },
+        async init() {},
+        lock() { unlocked = false; },
+        async address(branch, index) {
+          if (branch === 1) return CHANGE0;
+          return index === 0 ? RECV : RECV1;
+        },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() {
+          return {
+            current: "d0",
+            items: [{
+              id: "d0", name: "账户 1", kind: "derived", account: 0,
+              address: RECV, receiveIndex: 0, changeIndex: 0, gapLimit: 20,
+            }],
+          };
+        },
+        async setBook() {},
+        async getMeta() {
+          return { homeScan: { d0: [RECV, CHANGE0] } };
+        },
+        async setMeta() {},
+        async getIdle() { return null; },
+      },
+      async fetchAddress(address, { signal } = {}) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        // Hold every gap probe past the receive cursor so home's full rescan never finishes.
+        if (address === RECV1) {
+          await gapGate;
+          if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+          if (sendOpened) gapProbesDuringSend += 1;
+          return { balance: 0n, txCount: 0, activity: [] };
+        }
+        if (address === RECV) {
+          return { balance: 199139538n, txCount: 1, activity: [] };
+        }
+        return { balance: 0n, txCount: 0, activity: [] };
+      },
+      async estimateFees() {
+        return { menu: { slow: 1, standard: 2, fast: 50 }, fallback: false };
+      },
+    });
+    // Home keeps the hero on loading while the gap is held. Send still uses the known-address sum.
+    await until(() => document.getElementById("screen-home").hidden === false);
+    sendOpened = true;
+    await until(() => {
+      if (document.getElementById("screen-send").hidden) document.getElementById("goSend").click();
+      return document.getElementById("availLine").textContent.includes("1.99139538");
+    });
+    assert.equal(document.getElementById("homeBalance").textContent, "Loading…");
+    assert.match(document.getElementById("availLine").textContent, /1\.99139538/);
+    assert.equal(gapProbesDuringSend, 0, "send snapshot must not gap-scan");
+    releaseGap();
+    await app.ready.catch(() => {});
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("review skips a second gap scan and fetches send UTXOs in parallel", async () => {
+  const RECV = ADDRESS;
+  const CHANGE0 = "prl1pya7e4s6kl2tpf5awz34687j6cngw0lgrqd3qq927w2qzusxmgcgs4yad5m";
+  const RECV1 = "prl1pvdtcl546a64kk9p06nc75vrwlqfrl3m9myhl07wd69zvfma6fq3q9aduze";
+  const PAY_TO = "prl1penz3j6q2rvnh02axv4ysxp6z789qtteezuq0jnm2nr5w562uaywqp6a2pw";
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let unlocked = true;
+  let utxoInFlight = 0;
+  let utxoPeak = 0;
+  let vaultCallsDuringReview = 0;
+  let reviewing = false;
+  let releaseUtxos;
+  const utxoGate = new Promise((resolve) => { releaseUtxos = resolve; });
+  const coin = fundedUtxo(RECV);
+  const gapProbes = [];
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked, ready: true }; },
+        async init() {},
+        lock() { unlocked = false; },
+        async address(branch, index) {
+          if (reviewing) vaultCallsDuringReview += 1;
+          if (branch === 1) return CHANGE0;
+          return index === 0 ? RECV : RECV1;
+        },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() {
+          return {
+            current: "d0",
+            items: [{
+              id: "d0", name: "账户 1", kind: "derived", account: 0,
+              address: RECV, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+            }],
+          };
+        },
+        async setBook() {},
+        async getMeta() {
+          return { homeScan: { d0: [RECV, CHANGE0] }, cursors: { d0: { receiveNext: 0, changeNext: 0 } } };
+        },
+        async setMeta() {},
+        async getIdle() { return null; },
+      },
+      async fetchAddress(address, { signal } = {}) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        // RECV1 is only touched by gap scan past the receive cursor — not by UTXO collection.
+        if (address === RECV1) gapProbes.push(Date.now());
+        if (address === RECV) {
+          return { balance: 199139538n, txCount: 1, activity: [] };
+        }
+        return { balance: 0n, txCount: 0, activity: [] };
+      },
+      async fetchUtxos(address, { signal } = {}) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        utxoInFlight += 1;
+        utxoPeak = Math.max(utxoPeak, utxoInFlight);
+        try {
+          await utxoGate;
+          if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+          return address === RECV ? [coin] : [];
+        } finally {
+          utxoInFlight -= 1;
+        }
+      },
+      async estimateFees() {
+        return { menu: { slow: 1, standard: 2, fast: 50 }, fallback: false };
+      },
+    });
+    await app.ready;
+    await until(() => document.getElementById("homeBalance").textContent === "1.99139538");
+    document.getElementById("goSend").click();
+    await until(() => document.getElementById("screen-send").hidden === false);
+    await until(() => document.getElementById("availLine").textContent.includes("1.99139538"));
+    // Home gap should finish (send no longer aborts it); sample after it settles.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const gapBeforeReview = gapProbes.length;
+    assert.ok(gapBeforeReview > 0, "home should gap-scan once");
+
+    document.getElementById("sendTo").value = PAY_TO;
+    document.getElementById("sendTo").dispatchEvent(new document.defaultView.Event("input", { bubbles: true }));
+    document.getElementById("sendAmount").value = "0.5";
+    document.getElementById("sendAmount").dispatchEvent(new document.defaultView.Event("input", { bubbles: true }));
+    await until(() => document.getElementById("toConfirm").disabled === false);
+
+    reviewing = true;
+    document.getElementById("toConfirm").click();
+    await until(() => utxoPeak >= 2, 100);
+    releaseUtxos();
+    await until(() => document.getElementById("screen-confirm").hidden === false);
+    reviewing = false;
+
+    assert.equal(gapProbes.length, gapBeforeReview, "prepare must not re-run gap probes after home coverage");
+    assert.ok(utxoPeak >= 2, "receive and change UTXO fetches should overlap");
+    // Cursor window only (recv0+change0+change bump) — not a peer path walk of dozens of indexes.
+    assert.ok(vaultCallsDuringReview <= 8, `review vault.address calls should stay tiny, got ${vaultCallsDuringReview}`);
+    assert.match(document.getElementById("confirmAmount").textContent, /0\.5/);
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("reopened popup paints the saved total before the background refresh", async () => {
+  const html = readFileSync(new URL("../src/popup.html", import.meta.url), "utf8");
+  const snapshots = { value: null };
+  let hold = null;
+  let changeBalance = 2110000000n;
+  const storage = {
+    async getVault() { return { version: 2 }; },
+    async getBook() {
+      return {
+        current: "d0",
+        items: [{
+          id: "d0", name: "账户 1", kind: "derived", account: 0,
+          address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+        }],
+      };
+    },
+    async setBook() {},
+    async getMeta() { return { cursors: { d0: { receiveNext: 0, changeNext: 0 } } }; },
+    async setMeta() {},
+    async getIdle() { return null; },
+    async getHomeSnapshots() { return snapshots.value; },
+    async setHomeSnapshots(next) { snapshots.value = structuredClone(next); },
+  };
+  const vault = {
+    get status() { return { exists: true, unlocked: true, ready: true }; },
+    async init() {},
+    lock() {},
+    async address(branch, index) {
+      if (branch === 0 && index === 0) return ADDRESS;
+      if (branch === 1 && index === 0) return CHANGE;
+      return `${ADDRESS}-${branch}-${index}`;
+    },
+    subscribe() { return () => {}; },
+  };
+  async function fetchAddress(address) {
+    if (hold) await hold;
+    if (address === ADDRESS) return { balance: 630000000n, activity: [] };
+    if (address === CHANGE) return { balance: changeBalance, activity: [] };
+    return { balance: 0n, activity: [] };
+  }
+  const previous = globalThis.document;
+  const first = parseHTML(html);
+  globalThis.document = first.document;
+  try {
+    const app = mount(first.document, { vault, storage, fetchAddress });
+    await app.ready;
+    await until(() => {
+      const bucket = snapshots.value && Object.values(snapshots.value)[0];
+      return bucket?.d0?.balance === "2740000000";
+    });
+    assert.equal(Object.values(snapshots.value)[0].d0.balance, "2740000000");
+
+    let release;
+    hold = new Promise((resolve) => { release = resolve; });
+    changeBalance = 2210000000n;
+    const second = parseHTML(html);
+    globalThis.document = second.document;
+    const reopened = mount(second.document, { vault, storage, fetchAddress });
+    await until(() => second.document.getElementById("homeBalance").textContent === "27.4");
+    assert.equal(second.document.getElementById("homeBalance").textContent, "27.4");
+    release();
+    await reopened.ready;
+    await until(() => second.document.getElementById("homeBalance").textContent === "28.4");
+    assert.equal(second.document.getElementById("homeBalance").textContent, "28.4");
+  } finally {
+    globalThis.document = previous;
   }
 });

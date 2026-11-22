@@ -175,11 +175,11 @@
             </div>
           </div>
           <div class="balance-hero">
-            <p class="fiat" id="homeFiat" data-i18n="home.fiat.loading">Fetching total value…</p>
             <div class="balance-amount">
               <p class="balance" id="homeBalance" data-i18n="home.balance.loading">Loading…</p>
               <span class="balance-unit">PEARL</span>
             </div>
+            <p class="fiat" id="homeFiat" data-i18n="home.fiat.loading">Fetching total value…</p>
             <p class="spot" id="homeSpot" hidden></p>
           </div>
           <div id="homeAddr" class="sr-only"></div>
@@ -230,43 +230,57 @@
         <div class="head"><button type="button" class="icon" data-back="screen-home" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="send.title">Send</h2></div>
         <div class="steps" data-i18n-aria-label="send.progress12" aria-label="Send progress 1/2"><span class="on"></span><span></span></div>
         <div class="send-body">
-          <label for="sendTo" data-i18n="send.toLabel">Recipient address</label>
-          <div class="field-row send-to-row">
-            <input id="sendTo" autocomplete="off" spellcheck="false" placeholder="prl1…" aria-describedby="whoError whoOk">
+          <div class="send-block">
+            <label for="sendTo" data-i18n="send.toLabel">Recipient address</label>
+            <div class="field-row send-to-row">
+              <input id="sendTo" autocomplete="off" spellcheck="false" placeholder="prl1…" aria-describedby="whoError whoOk">
+            </div>
+            <p class="hint ok" id="whoOk" hidden data-i18n="send.addressOk">Address format looks good</p>
+            <p class="hint bad" role="alert" id="whoError"></p>
           </div>
-          <p class="hint ok" id="whoOk" hidden data-i18n="send.addressOk">Address format looks good</p>
-          <p class="hint bad" role="alert" id="whoError"></p>
 
-          <label for="sendAmount" data-i18n="send.amountLabel">Amount</label>
-          <div class="amount-card">
-            <input id="sendAmount" class="amount-input" inputmode="decimal" placeholder="0" data-i18n-aria-label="send.amountAria" aria-label="Amount">
-            <span class="amount-unit">PEARL</span>
+          <div class="send-block send-block-amount">
+            <label for="sendAmount" data-i18n="send.amountLabel">Amount</label>
+            <div class="amount-card">
+              <input id="sendAmount" class="amount-input" inputmode="decimal" placeholder="0" data-i18n-aria-label="send.amountAria" aria-label="Amount">
+              <span class="amount-unit">PEARL</span>
+            </div>
+            <div class="amt-row">
+              <span id="availLine">Available balance loading…</span>
+            </div>
+            <div class="amt-quick" role="group" data-i18n-aria-label="send.amountQuickAria" aria-label="Quick amount">
+              <button type="button" class="btn ghost tiny amt-pct" data-pct="25">25%</button>
+              <button type="button" class="btn ghost tiny amt-pct" data-pct="50">50%</button>
+              <button type="button" class="btn ghost tiny amt-pct" data-pct="75">75%</button>
+              <button type="button" class="btn ghost tiny amt-pct" data-pct="100" id="maxBtn" data-i18n="action.all">All</button>
+            </div>
+            <p class="hint bad" role="alert" id="amtError"></p>
           </div>
-          <div class="amt-row">
-            <span id="availLine" data-i18n="home.avail.loading">Available balance loading…</span>
-            <button type="button" class="btn ghost tiny" id="maxBtn" data-i18n="action.all">All</button>
-          </div>
-          <p class="hint bad" role="alert" id="amtError"></p>
 
-          <p class="k send-fee-label" data-i18n="send.networkFee">Network fee</p>
-          <div class="fees fees-compact">
-            <button type="button" class="fee" id="fee-slow" data-fee="slow"><b data-i18n="send.fee.slow">Slow</b><small data-i18n="send.fee.etaSlow">~25 blocks</small></button>
-            <button type="button" class="fee" id="fee-standard" data-fee="standard"><b data-i18n="send.fee.standard">Standard</b><small data-i18n="send.fee.etaStandard">~10 blocks</small></button>
-            <button type="button" class="fee" id="fee-fast" data-fee="fast" aria-checked="true"><b data-i18n="send.fee.fast">Fast</b><small data-i18n="send.fee.etaFast">~1 block</small></button>
+          <div class="send-block send-block-fee">
+            <p class="k send-fee-label" data-i18n="send.networkFee">Network fee</p>
+            <div class="fees fees-compact">
+              <button type="button" class="fee" id="fee-slow" data-fee="slow"><b data-i18n="send.fee.slow">Slow</b><small data-i18n="send.fee.etaSlow">~25 blocks</small></button>
+              <button type="button" class="fee" id="fee-standard" data-fee="standard"><b data-i18n="send.fee.standard">Standard</b><small data-i18n="send.fee.etaStandard">~10 blocks</small></button>
+              <button type="button" class="fee" id="fee-fast" data-fee="fast" aria-checked="true"><b data-i18n="send.fee.fast">Fast</b><small data-i18n="send.fee.etaFast">~1 block</small></button>
+            </div>
+            <p class="fee-selected" id="feeSelected" aria-live="polite"></p>
+            <p class="sub fee-note" id="feeNote"></p>
+            <details class="advanced" id="feeCustom">
+              <summary id="customFee"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span data-i18n="send.customFee">Custom fee rate</span></summary>
+              <label for="customRate" data-i18n="send.customRateLabel">Grains per byte</label>
+              <input id="customRate" inputmode="numeric" data-i18n-placeholder="send.customRatePlaceholder" placeholder="e.g. 8">
+              <p class="custom-fee-est" id="customFeeEst" hidden></p>
+              <p class="hint" data-i18n="send.grainHint">1 PEARL = 100 million grains. You usually do not need to change this.</p>
+            </details>
           </div>
-          <p class="fee-selected" id="feeSelected" aria-live="polite"></p>
-          <p class="sub fee-note" id="feeNote"></p>
-          <details class="advanced" id="feeCustom">
-            <summary id="customFee"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span data-i18n="send.customFee">Custom fee rate</span></summary>
-            <label for="customRate" data-i18n="send.customRateLabel">Grains per byte</label>
-            <input id="customRate" inputmode="numeric" data-i18n-placeholder="send.customRatePlaceholder" placeholder="e.g. 8">
-            <p class="custom-fee-est" id="customFeeEst" hidden></p>
-            <p class="hint" data-i18n="send.grainHint">1 PEARL = 100 million grains. You usually do not need to change this.</p>
-          </details>
           <p class="hint bad" role="alert" id="sendError"></p>
         </div>
         <div class="send-foot">
-          <button type="button" class="btn primary" id="toConfirm" disabled data-i18n="action.review">Review</button>
+          <div class="send-actions">
+            <button type="button" class="btn ghost" id="toConfirm" disabled data-i18n="action.review">Review</button>
+            <button type="button" class="btn primary" id="sendDirect" disabled data-i18n="action.sendDirect">Send now</button>
+          </div>
         </div>
       </section>
 
@@ -675,8 +689,10 @@
       <div id="accountList"></div>
       <div class="acct-actions">
         <button type="button" class="btn ghost" id="addDerived" data-i18n="accounts.add">Add account</button>
+        <button type="button" class="btn ghost" id="sheetCreate" data-i18n="welcome.create" hidden>Create new wallet</button>
+        <button type="button" class="btn ghost" id="sheetImport" data-i18n="welcome.importExisting" hidden>I already have a wallet</button>
         <button type="button" class="btn ghost" id="addMenuWatch" data-i18n="accounts.addWatch">Watch-only wallet</button>
-        <p class="hint" data-i18n="accounts.addHint">“Add account” derives another under the same phrase without replacing wallets. “Watch-only” tracks one address; balance excludes change and other addresses.</p>
+        <p class="hint" id="accountSheetHint" data-i18n="accounts.addHint">“Add account” derives another under the same phrase without replacing wallets. “Watch-only” tracks one address; balance excludes change and other addresses.</p>
       </div>
     </dialog>
     <div class="sheet-screen" id="screen-add-account" hidden>
@@ -694,6 +710,15 @@
         <div class="head"><button type="button" class="icon" id="closeUnlock" data-i18n-aria-label="action.close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button><h2 data-i18n="unlock.title">Enter password</h2></div>
         <label for="unlockPw" data-i18n="unlock.password">Password</label>
         <input id="unlockPw" type="password" autocomplete="current-password" data-i18n-placeholder="unlock.placeholder" placeholder="Password">
+        <label class="check-row send-auth-row" for="sendAuthRemember">
+          <input id="sendAuthRemember" type="checkbox">
+          <span data-i18n="unlock.sendAuthRemember">Skip password for upcoming sends</span>
+        </label>
+        <div class="send-auth-mins" id="sendAuthMins" hidden role="radiogroup" data-i18n-aria-label="unlock.sendAuthMinsGroup" aria-label="Skip-password duration">
+          <button type="button" class="btn ghost tiny send-auth-min" data-preset="5" data-mins="5" aria-checked="true">5</button>
+          <button type="button" class="btn ghost tiny send-auth-min" data-preset="15" data-mins="15" aria-checked="false">15</button>
+          <button type="button" class="btn ghost tiny send-auth-min" data-preset="30" data-mins="30" aria-checked="false">30</button>
+        </div>
         <p class="hint bad" role="alert" id="unlockError"></p>
         <button type="button" class="btn primary" id="signBtn" data-i18n="unlock.signSend">Sign and send</button>
       </div>
@@ -721,6 +746,16 @@
       </div>
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <div class="send-busy" id="sendBusy" hidden aria-hidden="true">
+      <div class="send-busy-card" role="status" aria-live="polite" aria-atomic="true">
+        <div class="send-busy-mark" aria-hidden="true">
+          <span class="send-busy-ring"></span>
+          <img class="send-busy-orb" src="icons/pearl.webp" width="56" height="56" alt="">
+        </div>
+        <p class="send-busy-title" id="sendBusyText" data-i18n="send.busy.prepare">Preparing transaction…</p>
+        <p class="send-busy-sub" data-i18n="send.busy.sub">Please keep this window open</p>
+      </div>
+    </div>
   </div>
   <script src="popup.js"></script>
 </body>

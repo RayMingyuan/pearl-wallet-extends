@@ -168,14 +168,21 @@ export function mountShell(document, {
         paintFeesLoading();
       }
       paintCustomFeeEst();
+      paintAvailLine();
       syncSendCompose();
-      q("toConfirm").textContent = t("action.review");
+      resetSendActionLabels();
     }
     try { if (storage.setLocale) await storage.setLocale(locale); } catch {}
   }
 
   const screens = [...document.querySelectorAll(".screen")];
   let reads = new AbortController();
+  // Home gap in flight. Send awaits this instead of spending a stale cursor or starting a second scan.
+  let homeCoverageWork = Promise.resolve();
+  // Cursor-window sum is not the wallet total. Hold the hero on "loading" until the gap scan lands.
+  let homeBalancePending = false;
+  // In-flight estimatefee. Review waits so a fast click cannot sign the cold preset.
+  let feeWork = Promise.resolve();
   let captureDraft = false;
   let draftWrite = Promise.resolve();
   const DRAFT_FORGET = new Set([
@@ -185,12 +192,21 @@ export function mountShell(document, {
     "screen-accounts-preview",
     "screen-structure",
   ]);
+  let readGeneration = 0;
   function beginReads() {
+    readGeneration += 1;
     reads.abort();
     reads = new AbortController();
   }
+  // Coin selection must not abort the home gap scan (that forced a second 10s+ rescan).
+  let sendReads = new AbortController();
+  function beginSendReads() {
+    sendReads.abort();
+    sendReads = new AbortController();
+  }
   function stopReads() {
     reads.abort();
+    sendReads.abort();
   }
   function readAddress(address) {
     return fetchAddress(address, { signal: reads.signal });
@@ -608,19 +624,32 @@ export function mountShell(document, {
     state.usedReceiveByAccount[key] = bucket;
     return bucket;
   }
+  // address → path memo; unknown peers used to re-walk dozens of vault RPCs on every send/home refresh.
+  const derivedPathCache = new Map();
+  function derivedPathCacheKey(item, address) {
+    return `${activeNetwork()}::${item?.account ?? 0}::${address || ""}`;
+  }
+  function clearDerivedPathCache() {
+    derivedPathCache.clear();
+  }
   async function pathForDerivedAddress(item, address, floor = 0) {
     if (!item || item.kind !== "derived" || !vault.address || !address) return null;
+    const key = derivedPathCacheKey(item, address);
+    if (derivedPathCache.has(key)) return derivedPathCache.get(key);
     const account = item.account ?? 0;
     const limit = derivedSearchLimit(item, floor);
     for (let index = 0; index <= limit; index += 1) {
       for (const branch of [0, 1]) {
         try {
           if (await vault.address(branch, index, account) === address) {
-            return { branch, index, account };
+            const path = { branch, index, account };
+            derivedPathCache.set(key, path);
+            return path;
           }
         } catch { /* Skip a path that cannot be derived. */ }
       }
     }
+    derivedPathCache.set(key, null);
     return null;
   }
   // Home balance, activity, and send UTXOs share one address set, so change does not show up on only one of them.
@@ -653,30 +682,46 @@ export function mountShell(document, {
   }
   async function resolveWalletCoverage(item, { refresh = false } = {}) {
     if (!item?.address) return { entries: new Map(), addresses: [] };
-    if (refresh && item.kind === "derived" && vault.status.unlocked) {
-      await refreshIndexes(item, { chains: ["receive", "change"] });
+    const chains = ["receive", "change"];
+    // Skip a second full gap scan when the send/home page just refreshed the same cursors.
+    if (refresh && item.kind === "derived" && vault.status.unlocked && !indexesFresh(item, chains)) {
+      await refreshIndexes(item, { chains });
     }
     const peers = await listWalletPeerAddresses(item);
-    if (item.kind === "derived" && vault.status.unlocked && vault.address) {
-      for (const address of peers) {
-        const path = await pathForDerivedAddress(item, address, peers.length);
-        if (!path) continue;
-        if (path.branch === 0) item.receiveIndex = Math.max(item.receiveIndex || 0, path.index);
-        else item.changeIndex = Math.max(item.changeIndex || 0, path.index);
-      }
-      try { await saveBook(); } catch { /* A failed cursor write does not block the flow. */ }
-    }
     const entries = new Map();
     if (item.kind === "derived" && vault.status.unlocked && vault.address) {
-      for (const path of discoveryPaths(item)) {
-        try {
-          entries.set(await vault.address(path.branch, path.index, path.account), path);
-        } catch { /* Skip a path that cannot be derived. */ }
-      }
-      for (const address of peers) {
-        if (entries.has(address)) continue;
-        const path = await pathForDerivedAddress(item, address, peers.length);
-        if (path) entries.set(address, path);
+      // Cursor window first (cheap). Only path-search peers that are not already covered.
+      let cursorDirty = false;
+      const paintDerived = async () => {
+        const derived = await Promise.all(discoveryPaths(item).map(async (path) => {
+          try { return [await vault.address(path.branch, path.index, path.account), path]; }
+          catch { return null; }
+        }));
+        for (const row of derived) {
+          if (row) entries.set(row[0], row[1]);
+        }
+      };
+      await paintDerived();
+      const missing = peers.filter((address) => !entries.has(address));
+      if (missing.length) {
+        const found = await Promise.all(
+          missing.map(async (address) => [address, await pathForDerivedAddress(item, address, 0)]),
+        );
+        for (const [address, path] of found) {
+          if (!path) continue;
+          entries.set(address, path);
+          if (path.branch === 0) {
+            const next = Math.max(item.receiveIndex || 0, path.index);
+            if (next !== (item.receiveIndex || 0)) { item.receiveIndex = next; cursorDirty = true; }
+          } else {
+            const next = Math.max(item.changeIndex || 0, path.index);
+            if (next !== (item.changeIndex || 0)) { item.changeIndex = next; cursorDirty = true; }
+          }
+        }
+        if (cursorDirty) {
+          await paintDerived();
+          try { await saveBook(); } catch { /* A failed cursor write does not block the flow. */ }
+        }
       }
     } else {
       for (const address of peers) entries.set(address, null);
@@ -699,7 +744,18 @@ export function mountShell(document, {
     return merged;
   }
   async function loadWalletSnapshot(item, { refresh = true, extraAddresses = [], persist = true } = {}) {
+    // Capture the controller that started this call. beginReads() replaces `reads`, so a
+    // later check of the global signal would miss the abort and commit a partial sum.
+    const generation = readGeneration;
+    const signal = reads.signal;
+    const stopIfStale = () => {
+      if (signal.aborted || generation !== readGeneration) {
+        throw new DOMException(t("error.queryAborted"), "AbortError");
+      }
+    };
+    stopIfStale();
     const { entries, addresses } = await resolveWalletCoverage(item, { refresh });
+    stopIfStale();
     const scan = [...addresses];
     const seen = new Set(scan);
     for (const address of extraAddresses) {
@@ -709,13 +765,17 @@ export function mountShell(document, {
       if (!entries.has(address)) entries.set(address, null);
     }
     const snaps = await Promise.all(scan.map(async (address) => {
+      stopIfStale();
       try {
-        return { ok: true, address, snap: await readAddress(address) };
+        return { ok: true, address, snap: await fetchAddress(address, { signal }) };
       } catch (error) {
+        if (error?.name === "AbortError" || signal.aborted || generation !== readGeneration) {
+          throw error?.name === "AbortError" ? error : new DOMException(t("error.queryAborted"), "AbortError");
+        }
         return { ok: false, address, error };
       }
     }));
-    if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
+    stopIfStale();
     const ok = snaps.filter((entry) => entry.ok);
     if (!ok.length) throw snaps[0]?.error || new Error(t("error.queryFailed"));
     let balance = 0n;
@@ -733,6 +793,8 @@ export function mountShell(document, {
     const hintAddresses = [item.address, ...scan];
     const rows = presentActivity(await mergeWalletActivity(groups, hintAddresses));
     const receive = (await defaultReceiveAddress(item)) || item.address;
+    // A tab switch aborts this signal. Do not store or publish the addresses that happened to return.
+    stopIfStale();
     // Preview paints (gap scan still pending) must not overwrite the durable home cache with a partial total.
     if (persist) {
       writeHomeCache(item.id, {
@@ -750,16 +812,49 @@ export function mountShell(document, {
     state.activityError = activityError;
     return { balance, rows, activityError, receive, scanAddresses: scan, entries };
   }
-  async function collectSendUtxos(item) {
-    const { entries, addresses } = await resolveWalletCoverage(item, { refresh: true });
-    const collected = [];
-    for (const [address, path] of entries) {
-      if (!path) continue;
-      if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
-      const found = await fetchUtxos(address, { signal: reads.signal, network: activeNetwork() });
-      for (const utxo of found) collected.push({ ...utxo, address, path });
+  async function collectSendUtxos(item, { refresh = true } = {}) {
+    // Send coin selection only needs the derivation cursor window — not a full peer path walk.
+    const chains = ["receive", "change"];
+    if (refresh && item.kind === "derived" && vault.status.unlocked && !indexesFresh(item, chains)) {
+      await refreshIndexes(item, { chains });
     }
-    return { collected, addresses };
+    const entries = new Map();
+    if (item.kind === "derived" && vault.status.unlocked && vault.address) {
+      const derived = await Promise.all(discoveryPaths(item).map(async (path) => {
+        try { return [await vault.address(path.branch, path.index, path.account), path]; }
+        catch { return null; }
+      }));
+      for (const row of derived) {
+        if (row) entries.set(row[0], row[1]);
+      }
+    }
+    const targets = [...entries.entries()];
+    if (sendReads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
+    const batches = await Promise.all(targets.map(async ([address, path]) => {
+      if (sendReads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
+      const found = await fetchUtxos(address, { signal: sendReads.signal, network: activeNetwork() });
+      return found.map((utxo) => ({ ...utxo, address, path }));
+    }));
+    return { collected: batches.flat(), addresses: [...entries.keys()] };
+  }
+  /** Refresh pinned sends and drop locks once they confirm or fail. */
+  async function settleSpendLocks() {
+    if (typeof spendGuard.list !== "function" || typeof broadcaster?.refresh !== "function") return;
+    let locks = [];
+    try { locks = await spendGuard.list(); }
+    catch { return; }
+    const txids = [...new Set(locks.map((item) => item.txid).filter((txid) => /^[0-9a-f]{64}$/.test(txid)))];
+    if (!txids.length) return;
+    await Promise.all(txids.map(async (txid) => {
+      if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
+      try {
+        const record = await broadcaster.refresh(txid);
+        if (record.status === "failed"
+          || (record.status === "broadcast" && Number(record.confirmations) > 0)) {
+          await spendGuard.releaseTxid(txid);
+        }
+      } catch { /* Keep the pin until a later settle. */ }
+    }));
   }
   async function cacheHomeAfterSpend(item, draft, txid) {
     if (!item?.id || !draft) return;
@@ -903,6 +998,57 @@ export function mountShell(document, {
   function syncSendCompose() {
     const ok = addressReady() && amountReady();
     q("toConfirm").disabled = !ok;
+    const sendDirect = q("sendDirect");
+    if (sendDirect) sendDirect.disabled = !ok;
+  }
+  function resetSendActionLabels() {
+    q("toConfirm").textContent = t("action.review");
+    const sendDirect = q("sendDirect");
+    if (sendDirect) sendDirect.textContent = t("action.sendDirect");
+  }
+  /** Wipe compose fields after a successful broadcast so the next send starts blank. */
+  function clearSendCompose() {
+    q("sendTo").value = "";
+    q("sendAmount").value = "";
+    q("customRate").value = "";
+    state.sendMax = false;
+    state.custom = false;
+    state.fee = "fast";
+    state.draft = null;
+    note("whoError", "");
+    note("amtError", "");
+    note("sendError", "");
+    q("whoOk").hidden = true;
+    if (q("feeCustom")) q("feeCustom").open = false;
+    markAmountQuick(null);
+    markFeeChoice(false);
+    paintCustomFeeEst();
+    resetSendActionLabels();
+    syncSendCompose();
+  }
+  function setSendActionsBusy(busy) {
+    const sendDirect = q("sendDirect");
+    if (busy) {
+      q("toConfirm").disabled = true;
+      q("toConfirm").textContent = t("send.preparing");
+      if (sendDirect) {
+        sendDirect.disabled = true;
+        sendDirect.textContent = t("send.preparing");
+      }
+      return;
+    }
+    resetSendActionLabels();
+    syncSendCompose();
+  }
+  function setSendBusy(on, messageKey = "send.busy.prepare") {
+    const el = q("sendBusy");
+    if (!el) return;
+    el.hidden = !on;
+    el.setAttribute("aria-hidden", on ? "false" : "true");
+    if (on) {
+      const text = q("sendBusyText");
+      if (text) text.textContent = t(messageKey);
+    }
   }
   function sendAmountValue() {
     return state.sendMax ? "MAX" : q("sendAmount").value.trim().replace(/,/g, "");
@@ -950,16 +1096,20 @@ export function mountShell(document, {
     return t("fee.note.live");
   }
   async function refreshFeeMenu({ paint = true } = {}) {
-    try {
-      const fees = await estimateFees();
-      state.rates = fees.menu;
-      state.feeFallback = Boolean(fees.fallback);
-      state.feeNote = feeNoteForMenu(fees);
-    } catch {
-      state.feeFallback = true;
-      state.feeNote = t("fee.note.fallback");
-    }
-    if (paint && state.screen === "screen-send") paintFeesReady();
+    const run = (async () => {
+      try {
+        const fees = await estimateFees();
+        state.rates = fees.menu;
+        state.feeFallback = Boolean(fees.fallback);
+        state.feeNote = feeNoteForMenu(fees);
+      } catch {
+        state.feeFallback = true;
+        state.feeNote = t("fee.note.fallback");
+      }
+      if (paint && state.screen === "screen-send") paintFeesReady();
+    })();
+    feeWork = run.catch(() => {});
+    return run;
   }
   function warmFeeMenu() {
     void refreshFeeMenu({ paint: state.screen === "screen-send" });
@@ -1125,39 +1275,52 @@ export function mountShell(document, {
     const el = q("homeFiat");
     const spot = q("homeSpot");
     if (!el) return;
+    const hasPrice = Boolean(state.pearlUsd?.amount);
+    const waiting = homeBalancePending
+      || state.balance == null
+      || state.priceStatus === "loading"
+      || (state.priceStatus === "idle" && !hasPrice);
+    const paintSpot = (mode) => {
+      if (!spot) return;
+      if (mode === "hide") {
+        spot.hidden = true;
+        spot.textContent = "";
+        return;
+      }
+      spot.hidden = false;
+      spot.textContent = formatSpotCaption(state.pearlUsd, { prefix: t("home.spotPrefix") });
+    };
+    // Eye only masks PEARL total + fiat valuation; spot quote stays public.
     if (state.hidden) {
       el.hidden = false;
       el.textContent = "••••";
-      if (spot) { spot.hidden = false; spot.textContent = "••••"; }
+      if (waiting || !hasPrice || state.priceStatus === "error") paintSpot("hide");
+      else {
+        try { paintSpot("show"); }
+        catch { paintSpot("hide"); }
+      }
       return;
     }
-    const hasPrice = Boolean(state.pearlUsd?.amount);
-    const waiting = state.balance == null
-      || state.priceStatus === "loading"
-      || (state.priceStatus === "idle" && !hasPrice);
     if (waiting) {
       el.hidden = false;
       el.textContent = t("home.fiat.loading");
-      if (spot) { spot.hidden = true; spot.textContent = ""; }
+      paintSpot("hide");
       return;
     }
     if (!hasPrice || state.priceStatus === "error") {
       el.hidden = false;
       el.textContent = t("home.fiat.noQuote");
-      if (spot) { spot.hidden = true; spot.textContent = ""; }
+      paintSpot("hide");
       return;
     }
     try {
       el.hidden = false;
       el.textContent = formatUsdTotal(state.balance, state.pearlUsd);
-      if (spot) {
-        spot.hidden = false;
-        spot.textContent = formatSpotCaption(state.pearlUsd, { prefix: t("home.spotPrefix") });
-      }
+      paintSpot("show");
     } catch {
       el.hidden = false;
       el.textContent = t("home.fiat.noQuote");
-      if (spot) { spot.hidden = true; spot.textContent = ""; }
+      paintSpot("hide");
     }
   }
   function paintBalance() {
@@ -1177,14 +1340,15 @@ export function mountShell(document, {
       paintFiat();
       return;
     }
-    if (state.balance == null) {
+    if (state.balance == null || homeBalancePending) {
       el.textContent = t("home.balance.loading");
       el.classList.add("skel");
       paintFiat();
       return;
     }
     el.classList.remove("skel");
-    el.textContent = pretty(state.balance, { compact: true });
+    // Home uses full PEARL precision (8 decimals), matching the desktop wallet.
+    el.textContent = pretty(state.balance);
     paintFiat();
   }
   const PRICE_FRESH_MS = 60_000;
@@ -1477,9 +1641,26 @@ export function mountShell(document, {
       });
     }
   }
+  const WATCH_BLOCKED_SETTINGS = ["viewSeed", "openPw", "openIdle", "openAddresses", "openAccountsPreview", "removeVault"];
+  function watchAccountSelected() {
+    return currentItem()?.kind === "watch";
+  }
   function paintSettings() {
     const idle = q("idleValue");
     if (idle) idle.textContent = t("idle.value", { min: state.idleMin });
+    const blocked = watchAccountSelected();
+    for (const id of WATCH_BLOCKED_SETTINGS) {
+      const el = q(id);
+      if (!el) continue;
+      el.disabled = blocked;
+      if (blocked) {
+        el.setAttribute("data-i18n-title", "settings.watchDisabled");
+        el.title = t("settings.watchDisabled");
+      } else {
+        el.removeAttribute("data-i18n-title");
+        el.removeAttribute("title");
+      }
+    }
     paintNetChrome();
     paintRemove();
     paintAppVersion();
@@ -1561,6 +1742,8 @@ export function mountShell(document, {
 
   async function openHome() {
     beginReads();
+    const generation = readGeneration;
+    try { await settleSpendLocks(); } catch { /* Pin settle must not block the home paint. */ }
     if (vault.status.unlocked) await syncBookFromVault();
     if (!currentItem() && vault.status.unlocked) {
       try { await ensureDerived(0); } catch { /* With no account list yet, use the derived address from the unlock. */ }
@@ -1613,9 +1796,21 @@ export function mountShell(document, {
     q("switchAddr").textContent = shortAddr(headerAddr || "");
     q("homeAddr").textContent = headerAddr || "";
     paintAccount(item);
-    const cached = readHomeCache(item.id);
-    const hasCache = applyHomeCache(cached);
-    if (!hasCache) {
+    const derivedRefresh = item.kind === "derived" && vault.status.unlocked;
+    let cached = readHomeCache(item.id);
+    if (!(cached && cached.balance != null && Array.isArray(cached.rows))) {
+      const restored = await restoreHomeSnapshot(item.id);
+      if (generation !== readGeneration || currentItem()?.id !== item.id) return;
+      if (restored) {
+        state.homeCache[item.id] = restored;
+        cached = restored;
+      }
+    }
+    const hasCache = Boolean(cached && cached.balance != null && Array.isArray(cached.rows));
+    // A derived wallet still has a gap scan ahead. Do not treat a missing cache as a real total.
+    homeBalancePending = !hasCache && derivedRefresh;
+    if (hasCache) applyHomeCache(cached);
+    else {
       state.balance = null;
       state.rows = [];
       state.activityError = "";
@@ -1626,38 +1821,50 @@ export function mountShell(document, {
     warmFeeMenu();
     // Cache first when present. Balance paints before gap rescan and before the USD quote.
     setHomeSoftRefresh(hasCache);
-    const derivedRefresh = item.kind === "derived" && vault.status.unlocked;
     const paintHomeSnapshot = (snapshot) => {
+      homeBalancePending = false;
       q("switchAddr").textContent = shortAddr(snapshot.receive);
       q("homeAddr").textContent = snapshot.receive;
       paintBalance();
-      q("availLine").textContent = t("home.avail", { amount: pretty(snapshot.balance) });
+      paintAvailLine(snapshot.balance);
+      if (state.screen === "screen-send") syncSendCompose();
       renderActivity(q("homeTx"), snapshot.rows.slice(0, 4), "screen-home");
     };
     try {
-      // Cold open: known receive/change addresses only, so the PEARL total appears before a full gap scan.
-      // When a gap rescan will follow, skip persisting the preview so a mid-scan close cannot leave a partial total.
+      // The cursor window is not the wallet total: later change addresses often hold the rest.
+      // Keep that sum for Send, but do not paint it on the home hero while a gap scan is still coming.
       if (!hasCache) {
         const quick = await loadWalletSnapshot(item, { refresh: false, persist: !derivedRefresh });
-        if (reads.signal.aborted || currentItem()?.id !== item.id) return;
-        paintHomeSnapshot(quick);
-        setHomeSoftRefresh(derivedRefresh);
+        if (generation !== readGeneration || currentItem()?.id !== item.id) return;
+        if (derivedRefresh) {
+          homeBalancePending = true;
+          paintBalance();
+          renderActivity(q("homeTx"), [], "screen-home");
+        } else {
+          paintHomeSnapshot(quick);
+        }
       }
       // Quote after balance is on screen; fiat stays on "loading" until the spot returns.
       void refreshPearlUsd();
       if (derivedRefresh) {
-        const snapshot = await loadWalletSnapshot(item, { refresh: true });
-        if (reads.signal.aborted || currentItem()?.id !== item.id) return;
+        const coverage = loadWalletSnapshot(item, { refresh: true });
+        homeCoverageWork = coverage.then(() => {}).catch(() => {});
+        const snapshot = await coverage;
+        if (generation !== readGeneration || currentItem()?.id !== item.id) return;
         paintHomeSnapshot(snapshot);
       } else if (hasCache) {
         const snapshot = await loadWalletSnapshot(item, { refresh: false });
-        if (reads.signal.aborted || currentItem()?.id !== item.id) return;
+        if (generation !== readGeneration || currentItem()?.id !== item.id) return;
         paintHomeSnapshot(snapshot);
       }
       setHomeSoftRefresh(false);
     } catch (error) {
       setHomeSoftRefresh(false);
       if (error?.name === "AbortError" || reads.signal.aborted) return;
+      if (homeBalancePending && state.balance != null) {
+        homeBalancePending = false;
+        paintBalance();
+      }
       if (hasCache || state.balance != null) {
         toast(speak(error) || t("toast.refreshFailBalance"));
         return;
@@ -1681,11 +1888,13 @@ export function mountShell(document, {
     }
     renderActivity(q("activityList"), state.rows || [], "screen-activity");
     beginReads();
+    const generation = readGeneration;
     try {
       const snapshot = await loadWalletSnapshot(item, {
         refresh: item.kind === "derived" && vault.status.unlocked,
       });
-      if (reads.signal.aborted || currentItem()?.id !== item.id) return;
+      if (generation !== readGeneration || currentItem()?.id !== item.id) return;
+      homeBalancePending = false;
       paintBalance();
       q("availLine").textContent = t("home.avail", { amount: pretty(snapshot.balance) });
       renderActivity(q("activityList"), snapshot.rows, "screen-activity");
@@ -1916,24 +2125,29 @@ export function mountShell(document, {
   }
   q("langEn").addEventListener("click", () => { void persistLocale("en"); });
   q("langZh").addEventListener("click", () => { void persistLocale("zh"); });
-  q("createWallet").addEventListener("click", async () => {
+  async function startCreate(back = "screen-welcome") {
     state.pendingAdd = "";
     if (await blockIfVault()) return;
+    q("screen-password").querySelector("[data-back]").dataset.back = back;
     state.flow = "create";
     state.mnemonicWords = 12;
     resetPasswordScreen();
     show("screen-password");
-  });
-  q("importWallet").addEventListener("click", async () => {
+  }
+  async function startImport(back = "screen-welcome") {
     state.pendingAdd = "";
     if (await blockIfVault()) return;
+    q("screen-import").querySelector("[data-back]").dataset.back = back;
     state.flow = "import";
     show("screen-import");
-  });
+  }
+  q("createWallet").addEventListener("click", () => { void startCreate("screen-welcome"); });
+  q("importWallet").addEventListener("click", () => { void startImport("screen-welcome"); });
   q("watchWallet").addEventListener("click", async () => {
     state.pendingAdd = "";
     if (await blockIfVault()) return;
     state.flow = "watch";
+    q("screen-watch").querySelector("[data-back]").dataset.back = "screen-welcome";
     show("screen-watch");
   });
   document.querySelectorAll("[data-back]").forEach((button) => button.addEventListener("click", () => {
@@ -2351,6 +2565,17 @@ export function mountShell(document, {
       row.append(pick, tools);
       list.append(row);
     }
+    paintAccountActions();
+  }
+  function paintAccountActions() {
+    const hasVault = vault.status.exists === true;
+    q("addDerived").hidden = !hasVault;
+    q("sheetCreate").hidden = hasVault;
+    q("sheetImport").hidden = hasVault;
+    const hint = q("accountSheetHint");
+    const key = hasVault ? "accounts.addHint" : "accounts.noVaultHint";
+    hint.setAttribute("data-i18n", key);
+    hint.textContent = t(key);
   }
   q("accountSwitch").addEventListener("click", () => {
     paintAccountSheet();
@@ -2390,10 +2615,19 @@ export function mountShell(document, {
   });
   q("addDerived").addEventListener("click", async () => {
     try {
+      if (!vault.status.exists) return;
       if (!vault.status.unlocked) { askPassword("derived"); return; }
       sheet(false);
       await beginDerived();
     } catch (error) { toast(speak(error)); }
+  });
+  q("sheetCreate").addEventListener("click", () => {
+    sheet(false);
+    void startCreate("screen-home");
+  });
+  q("sheetImport").addEventListener("click", () => {
+    sheet(false);
+    void startImport("screen-home");
   });
   q("addMenuWatch").addEventListener("click", () => {
     q("screen-watch").querySelector("[data-back]").dataset.back = "screen-home";
@@ -2458,6 +2692,7 @@ export function mountShell(document, {
   }
   function clearCursorFresh() {
     state.cursorFresh = Object.create(null);
+    clearDerivedPathCache();
   }
   function clearHomeCache() {
     // After locking, drop the balance cache but keep the latest scanned addresses, so a missing change address does not turn the balance into 0 after signing.
@@ -2473,13 +2708,103 @@ export function mountShell(document, {
     state.homeCache = next;
     state.tempReceiveIndex = null;
     state.tempReceiveSource = null;
+    clearPersistedHomeSnapshots();
   }
   function readHomeCache(itemId) {
     return itemId ? state.homeCache[itemId] || null : null;
   }
   function writeHomeCache(itemId, payload) {
     if (!itemId) return;
-    state.homeCache[itemId] = { ...payload, at: Date.now() };
+    const stored = { ...payload, at: Date.now() };
+    state.homeCache[itemId] = stored;
+    enqueueHomeSnapshot(itemId, stored);
+  }
+  function packHomeSnapshot(payload) {
+    if (payload?.balance == null) return null;
+    let balance;
+    try { balance = BigInt(payload.balance); }
+    catch { return null; }
+    if (balance < 0n) return null;
+    const rows = [];
+    for (const row of (payload.rows || []).slice(0, 40)) {
+      if (!row || typeof row.txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(row.txid)) continue;
+      let amount;
+      try { amount = BigInt(row.amount); }
+      catch { continue; }
+      rows.push({
+        txid: row.txid.toLowerCase(),
+        direction: row.direction === "in" || row.direction === "out" ? row.direction : "self",
+        amount: amount.toString(),
+        confirmations: Number.isInteger(row.confirmations) ? row.confirmations : null,
+        time: Number.isInteger(row.time) ? row.time : null,
+      });
+    }
+    return {
+      balance: balance.toString(),
+      rows,
+      activityError: typeof payload.activityError === "string" ? payload.activityError : "",
+      receive: typeof payload.receive === "string" ? payload.receive : "",
+      scanAddresses: (payload.scanAddresses || []).filter((address) => typeof address === "string"),
+      at: Date.now(),
+    };
+  }
+  function unpackHomeSnapshot(raw) {
+    if (!raw || typeof raw.balance !== "string" || !/^\d+$/.test(raw.balance)) return null;
+    let balance;
+    try { balance = BigInt(raw.balance); }
+    catch { return null; }
+    const rows = [];
+    for (const row of raw.rows || []) {
+      if (!row || typeof row.txid !== "string" || typeof row.amount !== "string" || !/^\d+$/.test(row.amount)) continue;
+      rows.push({
+        txid: row.txid,
+        direction: row.direction === "in" || row.direction === "out" ? row.direction : "self",
+        amount: BigInt(row.amount),
+        confirmations: Number.isInteger(row.confirmations) ? row.confirmations : null,
+        time: Number.isInteger(row.time) ? row.time : null,
+      });
+    }
+    return {
+      balance,
+      rows: presentActivity(rows),
+      activityError: typeof raw.activityError === "string" ? raw.activityError : "",
+      receive: typeof raw.receive === "string" ? raw.receive : "",
+      scanAddresses: Array.isArray(raw.scanAddresses) ? raw.scanAddresses.filter((address) => typeof address === "string") : [],
+      at: Number.isFinite(raw.at) ? raw.at : Date.now(),
+    };
+  }
+  let homeSnapshotWrite = Promise.resolve();
+  function enqueueHomeSnapshot(itemId, payload) {
+    if (typeof storage.getHomeSnapshots !== "function" || typeof storage.setHomeSnapshots !== "function") return;
+    const network = activeNetwork();
+    const packed = packHomeSnapshot(payload);
+    if (!packed) return;
+    homeSnapshotWrite = homeSnapshotWrite.then(async () => {
+      const all = (await storage.getHomeSnapshots()) || {};
+      const bucket = { ...(all?.[network] && typeof all[network] === "object" ? all[network] : {}) };
+      bucket[itemId] = packed;
+      await storage.setHomeSnapshots({ ...all, [network]: bucket });
+    }).catch(() => {});
+  }
+  async function restoreHomeSnapshot(itemId) {
+    if (!itemId || typeof storage.getHomeSnapshots !== "function") return null;
+    try {
+      const all = await storage.getHomeSnapshots();
+      return unpackHomeSnapshot(all?.[activeNetwork()]?.[itemId]);
+    } catch {
+      return null;
+    }
+  }
+  function clearPersistedHomeSnapshots() {
+    if (typeof storage.setHomeSnapshots !== "function") return;
+    const network = activeNetwork();
+    homeSnapshotWrite = homeSnapshotWrite.then(async () => {
+      const all = (await storage.getHomeSnapshots?.()) || {};
+      if (!all?.[network]) return;
+      const next = { ...all };
+      delete next[network];
+      await storage.setHomeSnapshots(next);
+    }).catch(() => {});
   }
   function applyHomeCache(cached) {
     if (!cached || cached.balance == null || !Array.isArray(cached.rows)) return false;
@@ -2505,27 +2830,36 @@ export function mountShell(document, {
     const prevReceive = Number.isInteger(item.receiveIndex) ? item.receiveIndex : 0;
     const prevChange = Number.isInteger(item.changeIndex) ? item.changeIndex : 0;
     const gap = item.gapLimit || 20;
+    const jobs = [];
     if (chains.includes("receive")) {
-      const receive = await scanChain(
-        (index) => addressWasUsed(0, index, item.account),
-        gap,
-        prevReceive,
-      );
-      if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
-      // Never rewind past an intentionally issued receive cursor (desktop-like rotation).
-      item.receiveIndex = Math.max(prevReceive, receive.next);
-      scanned.push("receive");
+      jobs.push((async () => {
+        const receive = await scanChain(
+          (index) => addressWasUsed(0, index, item.account),
+          gap,
+          prevReceive,
+        );
+        if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
+        // A failed or timed-out scan must not look fresh — that blocked a retry for 60s.
+        if (!receive.scanned) return;
+        // Never rewind past an intentionally issued receive cursor (desktop-like rotation).
+        item.receiveIndex = Math.max(prevReceive, receive.next);
+        scanned.push("receive");
+      })());
     }
     if (chains.includes("change")) {
-      const change = await scanChain(
-        (index) => addressWasUsed(1, index, item.account),
-        gap,
-        prevChange,
-      );
-      if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
-      item.changeIndex = Math.max(prevChange, change.next);
-      scanned.push("change");
+      jobs.push((async () => {
+        const change = await scanChain(
+          (index) => addressWasUsed(1, index, item.account),
+          gap,
+          prevChange,
+        );
+        if (reads.signal.aborted) throw new DOMException(t("error.queryAborted"), "AbortError");
+        if (!change.scanned) return;
+        item.changeIndex = Math.max(prevChange, change.next);
+        scanned.push("change");
+      })());
     }
+    await Promise.all(jobs);
     if (typeof vault.describe === "function") {
       try {
         const described = await vault.describe(item.account ?? 0);
@@ -2758,6 +3092,7 @@ export function mountShell(document, {
     }
   }
   async function openAccountsPreview() {
+    if (watchAccountSelected()) return;
     show("screen-accounts-preview");
     await paintAccountsPreview();
   }
@@ -2857,6 +3192,7 @@ export function mountShell(document, {
     }
   }
   async function openAddressManager() {
+    if (watchAccountSelected()) return;
     const item = currentItem();
     show("screen-addresses");
     const list = q("addressManageList");
@@ -3058,16 +3394,28 @@ export function mountShell(document, {
   });
   q("statusHome").addEventListener("click", () => openHome());
   q("homeActivityAll").addEventListener("click", () => openActivity());
-  // Review must not beginReads() while presentSend's snapshot still holds the vault.
-  let sendPageWork = Promise.resolve();
+  function paintAvailLine(balance = state.balance) {
+    if (balance == null) {
+      q("availLine").textContent = t("home.avail.loading");
+      return;
+    }
+    q("availLine").textContent = t("home.avail", { amount: pretty(balance) });
+  }
   async function presentSend() {
     const item = currentItem();
     note("whoError", "");
     note("amtError", "");
     note("sendError", "");
     q("whoOk").hidden = true;
-    q("availLine").textContent = state.balance == null ? t("home.avail.loading") : t("home.avail", { amount: pretty(state.balance) });
-    q("toConfirm").textContent = t("action.review");
+    // Prefer in-memory / home-cache total immediately — never block the send form on a gap rescan.
+    const cached = item?.id ? readHomeCache(item.id) : null;
+    if (state.balance == null && cached?.balance != null) {
+      state.balance = cached.balance;
+      if (Array.isArray(cached.rows)) state.rows = cached.rows;
+    }
+    paintAvailLine();
+    resetSendActionLabels();
+    markAmountQuick(state.sendMax ? 100 : null);
     syncSendCompose();
     if (state.feeNote) paintFeesReady();
     else paintFeesLoading();
@@ -3075,24 +3423,24 @@ export function mountShell(document, {
     paintCustomFeeEst();
     show("screen-send");
     try { q("sendTo").focus(); } catch { /* The test environment may have no focus. */ }
-    const snapshotTask = (async () => {
+    void (async () => {
       if (!item?.address) return;
-      beginReads();
+      // Wait for the home gap already in flight, then re-read. Opening send must not race it
+      // and paint a stale total over the cursor the scan just advanced.
+      await homeCoverageWork.catch(() => {});
+      if (currentItem()?.id !== item.id) return;
       try {
-        const snapshot = await loadWalletSnapshot(item, {
-          refresh: item.kind === "derived" && vault.status.unlocked,
-        });
+        const snapshot = await loadWalletSnapshot(item, { refresh: false });
         if (!reads.signal.aborted && state.screen === "screen-send" && currentItem()?.id === item.id) {
-          q("availLine").textContent = t("home.avail", { amount: pretty(snapshot.balance) });
+          paintAvailLine(snapshot.balance);
           syncSendCompose();
         }
-      } catch {
+      } catch (error) {
+        if (error?.name === "AbortError" || reads.signal.aborted) return;
         if (state.balance == null) q("availLine").textContent = t("home.avail.unavailable");
       }
     })();
-    const feesTask = refreshFeeMenu({ paint: true });
-    sendPageWork = Promise.all([snapshotTask, feesTask]).then(() => {});
-    await sendPageWork;
+    void refreshFeeMenu({ paint: true });
   }
   q("goSend").addEventListener("click", async () => {
     const item = currentItem();
@@ -3118,6 +3466,7 @@ export function mountShell(document, {
   });
   q("sendAmount").addEventListener("input", () => {
     state.sendMax = false;
+    markAmountQuick(null);
     syncSendCompose();
     rememberDraft();
   });
@@ -3186,17 +3535,35 @@ export function mountShell(document, {
     paintFeeSelected();
     rememberDraft();
   });
-  q("maxBtn").addEventListener("click", () => {
+  function markAmountQuick(pct) {
+    document.querySelectorAll(".amt-pct").forEach((button) => {
+      button.classList.toggle("is-active", pct != null && Number(button.dataset.pct) === pct);
+    });
+  }
+  function applyAmountPercent(pct) {
     if (state.balance == null) {
       toast(t("send.balanceLoading"));
       return;
     }
-    state.sendMax = true;
-    q("sendAmount").value = formatGrains(state.balance);
+    if (pct === 100) {
+      state.sendMax = true;
+      q("sendAmount").value = formatGrains(state.balance);
+    } else {
+      state.sendMax = false;
+      q("sendAmount").value = formatGrains((state.balance * BigInt(pct)) / 100n);
+    }
+    markAmountQuick(pct);
     syncSendCompose();
     rememberDraft();
+  }
+  document.querySelectorAll(".amt-pct").forEach((button) => {
+    button.addEventListener("click", () => {
+      const pct = Number(button.dataset.pct);
+      if (![25, 50, 75, 100].includes(pct)) return;
+      applyAmountPercent(pct);
+    });
   });
-  q("toConfirm").addEventListener("click", async () => {
+  async function prepareSendDraft() {
     const item = currentItem();
     syncSendCompose();
     const parsed = checkAddress(q("sendTo").value);
@@ -3205,34 +3572,43 @@ export function mountShell(document, {
       q("whoOk").hidden = true;
       shake(q("sendTo"));
       show("screen-send");
-      return;
+      return false;
     }
     const amount = sendAmountValue();
     if (amount !== "MAX" && !/^(?:\d+|\d+\.\d{1,8})$/.test(amount)) {
       note("amtError", t("send.enterAmountOrMax"));
       shake(q("sendAmount"));
       show("screen-send");
-      return;
+      return false;
     }
-    if (item.kind === "watch") { note("sendError", t("send.watchNoSend")); show("screen-send"); return; }
-    if (item.kind === "key") { note("sendError", t("send.keyNoSendDetail")); show("screen-send"); return; }
-    q("toConfirm").disabled = true;
-    q("toConfirm").textContent = t("send.preparing");
+    if (item.kind === "watch") { note("sendError", t("send.watchNoSend")); show("screen-send"); return false; }
+    if (item.kind === "key") { note("sendError", t("send.keyNoSendDetail")); show("screen-send"); return false; }
+    setSendActionsBusy(true);
+    setSendBusy(true, "send.busy.prepare");
     try {
-      // Fees may finish before the send-page snapshot; wait so beginReads does not collide with vault work.
-      await sendPageWork.catch(() => {});
-      beginReads();
       if (!vault.status.unlocked) throw new Error(t("send.unlockFirst"));
-      const { collected } = await collectSendUtxos(item);
+      // Join the scan already running. Only start one if that scan failed and left cursors stale.
+      await homeCoverageWork.catch(() => {});
+      if (item.kind === "derived" && vault.status.unlocked && !indexesFresh(item, ["receive", "change"])) {
+        await refreshIndexes(item, { chains: ["receive", "change"] });
+      }
+      beginSendReads();
+      const spendSettle = settleSpendLocks();
+      const utxoWait = collectSendUtxos(item, { refresh: false });
+      const [, , { collected }] = await Promise.all([feeWork, spendSettle, utxoWait]);
       if (collected.length > 100) throw new Error(t("send.utxoCap"));
-      if (!collected.length) {
+      const spendable = typeof spendGuard.excludeLocked === "function"
+        ? await spendGuard.excludeLocked(collected)
+        : collected;
+      if (!spendable.length) {
+        if (collected.length) throw err("err.spend.pendingConflict");
         if (state.balance != null && state.balance > 0n) {
           throw new Error(t("send.balanceNoUtxo"));
         }
         throw new Error(t("send.noUtxo"));
       }
-      await spendGuard.assertAvailable(collected);
-      const occupied = new Set(collected.map((utxo) => utxo.address).filter(Boolean));
+      await spendGuard.assertAvailable(spendable);
+      const occupied = new Set(spendable.map((utxo) => utxo.address).filter(Boolean));
       if (occupied.has(parsed.address)) {
         throw new Error(t("send.selfPay"));
       }
@@ -3251,7 +3627,7 @@ export function mountShell(document, {
         await saveBook();
       }
       state.draft = buildDraft({
-        utxos: collected,
+        utxos: spendable,
         sourceAddress: item.address,
         sourcePath: { branch: 0, index: 0, account: item.account },
         destination: parsed.address, changeAddress: change, changeIndex,
@@ -3266,27 +3642,80 @@ export function mountShell(document, {
       fillAddress(q("confirmChange"), state.draft.changeAddress);
       q("confirmChangeAmt").textContent = money(state.draft.change);
       note("sendError", "");
-      q("toConfirm").disabled = false;
-      q("toConfirm").textContent = t("action.review");
-      show("screen-confirm");
+      setSendActionsBusy(false);
+      return true;
     } catch (error) {
-      q("toConfirm").disabled = false;
-      q("toConfirm").textContent = t("action.review");
-      syncSendCompose();
-      if (error?.name === "AbortError") return;
+      setSendActionsBusy(false);
+      if (error?.name === "AbortError") return false;
       const message = error instanceof Error ? speak(error) : t("send.draftFail");
       note("sendError", message.includes(t("send.noUtxo")) && state.balance != null && state.balance > 0n
         ? t("send.balanceNoUtxo")
         : message);
       show("screen-send");
+      return false;
+    } finally {
+      setSendBusy(false);
     }
+  }
+  q("toConfirm").addEventListener("click", async () => {
+    if (!(await prepareSendDraft())) return;
+    show("screen-confirm");
   });
+  q("sendDirect").addEventListener("click", async () => {
+    if (!(await prepareSendDraft())) return;
+    await requestSendAuth();
+  });
+  const SEND_AUTH_PRESETS = [5, 15, 30];
+  function paintSendAuthOptions() {
+    const remember = q("sendAuthRemember");
+    const minsBox = q("sendAuthMins");
+    if (!remember || !minsBox) return;
+    const on = remember.checked === true;
+    minsBox.hidden = !on;
+    let selected = Number(minsBox.querySelector("[aria-checked='true']")?.dataset?.mins);
+    if (!SEND_AUTH_PRESETS.includes(selected)) selected = 5;
+    for (const button of minsBox.querySelectorAll(".send-auth-min")) {
+      const preset = Number(button.dataset.preset || button.dataset.mins);
+      button.dataset.mins = String(preset);
+      button.disabled = false;
+      button.hidden = false;
+      button.textContent = t("unlock.sendAuthMin", { n: preset });
+      button.setAttribute("aria-checked", preset === selected ? "true" : "false");
+    }
+  }
+  function selectedSendAuthMinutes() {
+    const raw = Number(q("sendAuthMins")?.querySelector("[aria-checked='true']")?.dataset?.mins);
+    return SEND_AUTH_PRESETS.includes(raw) ? raw : 5;
+  }
   function openUnlockForSend() {
     note("unlockError", "");
+    const remember = q("sendAuthRemember");
+    if (remember) remember.checked = false;
+    paintSendAuthOptions();
     q("screen-unlock").hidden = false;
     try { q("unlockPw").focus(); } catch { /* The test environment may have no focus. */ }
   }
+  async function requestSendAuth() {
+    if (typeof vault.sendAuthStatus === "function") {
+      try {
+        const status = await vault.sendAuthStatus();
+        if (status?.active) {
+          void signAndSend({ useGrace: true });
+          return;
+        }
+      } catch { /* Fall through to the password sheet. */ }
+    }
+    openUnlockForSend();
+  }
   q("closeUnlock").addEventListener("click", () => { q("screen-unlock").hidden = true; });
+  q("sendAuthRemember")?.addEventListener("change", () => paintSendAuthOptions());
+  q("sendAuthMins")?.addEventListener("click", (event) => {
+    const button = event.target.closest(".send-auth-min");
+    if (!button || button.disabled) return;
+    for (const item of q("sendAuthMins").querySelectorAll(".send-auth-min")) {
+      item.setAttribute("aria-checked", item === button ? "true" : "false");
+    }
+  });
 
   function paintBroadcast(view) {
     const status = ["broadcasting", "broadcast", "failed", "unknown"].includes(view?.status) ? view.status : "unknown";
@@ -3322,34 +3751,47 @@ export function mountShell(document, {
       : t("status.pendingConfirm");
   }
 
-  async function signAndSend({ password } = {}) {
+  async function signAndSend({ password, useGrace = false, rememberMins = 0 } = {}) {
     if (state.busy) return;
     if (!state.draft) throw new Error(t("send.noDraft"));
     state.busy = true;
     q("confirmSend").disabled = true;
     q("signBtn").disabled = true;
+    let overlayShown = false;
     try {
-      if (password == null || password === "") {
+      if (!useGrace && (password == null || password === "")) {
         openUnlockForSend();
         return;
       }
-      await ensureUnlockedWithPassword(password);
-      state.password = password;
+      setSendBusy(true, "send.busy.sign");
+      overlayShown = true;
+      if (!useGrace) {
+        await ensureUnlockedWithPassword(password);
+        state.password = password;
+      }
       await spendGuard.assertAvailable(state.draft.inputs);
       q("screen-unlock").hidden = true;
+      setSendBusy(true, "send.busy.broadcast");
       paintBroadcast({ status: "broadcasting" });
       show("screen-status");
-      const signed = await vault.signTransaction(state.draft, password);
+      const signed = await vault.signTransaction(
+        state.draft,
+        useGrace ? "" : password,
+        { rememberMins: useGrace ? 0 : rememberMins },
+      );
       const record = await broadcaster.submit({ draft: state.draft, signed, confirmedTxid: signed.txid });
       state.txid = record.txid;
       const spent = currentItem();
-      if (record.status === "unknown" || record.status === "broadcast") {
-        await spendGuard.pin(state.draft.inputs, { txid: record.txid, status: record.status });
-      } else if (record.status === "failed") {
+      if (record.status === "failed"
+        || (record.status === "broadcast" && Number(record.confirmations) > 0)) {
         await spendGuard.releaseTxid(record.txid);
+      } else if (record.status === "unknown" || record.status === "broadcast") {
+        await spendGuard.pin(state.draft.inputs, { txid: record.txid, status: record.status });
       }
       if (record.status !== "failed" && spent?.kind === "derived" && Number.isInteger(state.draft.changeIndex)) {
         spent.changeIndex = Math.max(spent.changeIndex || 0, state.draft.changeIndex + 1);
+        // Change UTXOs may appear after this spend — force the next review to rescan change.
+        if (state.cursorFresh?.[spent.id]) delete state.cursorFresh[spent.id].change;
         try { await saveBook(); } catch { /* A failed cursor write does not block the result page. */ }
       }
       if (mainnetStore?.rememberLatest) {
@@ -3373,9 +3815,14 @@ export function mountShell(document, {
         endpoint: record.endpoint || "",
         network: record.network,
       });
+      // Keep failed attempts' form for retry; a landed broadcast must not reopen the old payment.
+      if (record.status !== "failed") clearSendCompose();
       await rememberDraft();
       clearSecrets();
     } catch (error) {
+      if (useGrace && typeof vault.clearSendAuth === "function") {
+        try { await vault.clearSendAuth(); } catch { /* ignore */ }
+      }
       if (q("screen-status").hidden === false && q("statusDetail").textContent === "") {
         paintBroadcast({ status: "failed", failText: speak(error) });
         await rememberDraft();
@@ -3387,7 +3834,7 @@ export function mountShell(document, {
       ) || /解锁|密码/.test(speak(error)) || /解锁|密码/.test(message);
       note("unlockError", passwordUserMessage(message, "toast.sendFailed"));
       if (/^[0-9a-f]{64}$/.test(q("statusDetail").textContent) === false) {
-        if (needsUnlock || password != null) {
+        if (useGrace || needsUnlock || password != null) {
           openUnlockForSend();
           shake(q("screen-unlock"));
         } else {
@@ -3396,6 +3843,7 @@ export function mountShell(document, {
         }
       }
     } finally {
+      if (overlayShown) setSendBusy(false);
       state.password = "";
       state.busy = false;
       q("confirmSend").disabled = false;
@@ -3405,10 +3853,14 @@ export function mountShell(document, {
   }
 
   q("confirmSend").addEventListener("click", () => {
-    openUnlockForSend();
+    void requestSendAuth();
   });
   q("signBtn").addEventListener("click", () => {
-    signAndSend({ password: q("unlockPw").value });
+    const remember = q("sendAuthRemember")?.checked === true;
+    void signAndSend({
+      password: q("unlockPw").value,
+      rememberMins: remember ? selectedSendAuthMinutes() : 0,
+    });
   });
   q("bumpConf").addEventListener("click", async () => {
     const record = await broadcaster.refresh(state.txid);
@@ -3426,6 +3878,7 @@ export function mountShell(document, {
     await rememberDraft();
   });
   q("viewSeed").addEventListener("click", () => {
+    if (watchAccountSelected()) return;
     note("seedError", "");
     q("seedPw").value = "";
     q("seedGate").hidden = false;
@@ -3464,8 +3917,13 @@ export function mountShell(document, {
     renderWords("seedGrid", state.secret.split(" "), false);
     q("seedReveal").hidden = true;
   });
-  q("openPw").addEventListener("click", () => { note("pwChangeError", ""); show("screen-pwchange"); });
+  q("openPw").addEventListener("click", () => {
+    if (watchAccountSelected()) return;
+    note("pwChangeError", "");
+    show("screen-pwchange");
+  });
   q("openIdle").addEventListener("click", () => {
+    if (watchAccountSelected()) return;
     state.idleCustomOpen = false;
     paintIdle();
     show("screen-idle");
@@ -3653,13 +4111,19 @@ export function mountShell(document, {
       q("saveIdleCustom").dataset.busy = "";
     }
   });
-  q("lockNow").addEventListener("click", () => { clearSecrets(); vault.lock(); setLockHint(""); show("screen-lock"); });
+  q("lockNow").addEventListener("click", () => {
+    clearSecrets();
+    vault.lock();
+    setLockHint("");
+    show("screen-lock");
+  });
   function closeRemoveSheet() {
     q("screen-remove").hidden = true;
     q("removePw").value = "";
     note("removeError", "");
   }
   q("removeVault").addEventListener("click", () => {
+    if (watchAccountSelected()) return;
     closeRemoveSheet();
     q("screen-remove").hidden = false;
     try { q("removePw").focus(); } catch { /* The test environment may have no focus. */ }
@@ -3995,6 +4459,12 @@ export function mountShell(document, {
       paintNetworkScreen();
       show("screen-network");
       return;
+    }
+    if (draft.flow === "secret" || draft.flow === "pwchange") {
+      if (watchAccountSelected()) {
+        show("screen-settings");
+        return;
+      }
     }
     if (draft.flow === "secret") {
       state.secret = "";

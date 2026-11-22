@@ -51,6 +51,16 @@ export function createSpendGuard({ storage, now = Date.now } = {}) {
         }
       }
     },
+    /** Drop outpoints still waiting on a prior send so coin selection can use the rest. */
+    async excludeLocked(inputs) {
+      if (!Array.isArray(inputs) || !inputs.length) return [];
+      const locked = new Set((await read()).map((item) => item.id));
+      if (!locked.size) return inputs.slice();
+      return inputs.filter((input) => {
+        try { return !locked.has(outpointId(input.txid, input.vout)); }
+        catch { return false; }
+      });
+    },
     async list() {
       return read();
     },

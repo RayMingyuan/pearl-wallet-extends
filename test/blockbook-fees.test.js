@@ -84,6 +84,24 @@ test("failed estimatefee uses last live rates and does not poison the cache", as
   assert.equal(again.menu.fast, 513);
 });
 
+test("hung estimatefee falls back within the deadline", async () => {
+  clearFeeMenuCache();
+  const fetchImpl = (_url, { signal } = {}) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ ok: true, async text() { return JSON.stringify({ result: "0.00001000" }); } }), 30_000);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      const error = new Error("aborted");
+      error.name = signal.reason?.name || "AbortError";
+      reject(error);
+    }, { once: true });
+  });
+  const started = Date.now();
+  const result = await fetchFeeMenu(fetchImpl, "https://fees.test", { timeoutMs: 80 });
+  assert.ok(Date.now() - started < 2_000);
+  assert.equal(result.fallback, true);
+  assert.deepEqual(result.menu, FEE_FALLBACK);
+});
+
 test("cold fallback uses raised presets when no live menu exists", async () => {
   clearFeeMenuCache();
   const fetchImpl = async () => {
