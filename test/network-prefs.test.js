@@ -41,7 +41,7 @@ test("testnet default uses the public Testnet2 Blockbook and official tprl param
   });
   assert.equal(prefs.networkId, "Pearl testnet");
   assert.equal(prefs.indexerMode, "default");
-  assert.equal(prefs.origin, "https://blockbook.testnet.pearlresearch.ai");
+  assert.equal(prefs.origin, "https://blockbook.testnet2.pearlnetwork.net");
   assert.equal(needsOptionalHostPermission(prefs.origin), false);
   const params = getNetwork("Pearl testnet");
   assert.equal(params.hrp, "tprl");

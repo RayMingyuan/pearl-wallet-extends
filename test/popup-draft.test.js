@@ -661,7 +661,7 @@ test("custom indexer, recovery phrase page, and password change return without s
 
 test("view-transaction links follow the network the transaction was sent on", async () => {
   assert.equal(explorerTxUrl("Pearl mainnet", TXID), `https://blockbook.pearlresearch.ai/tx/${TXID}`);
-  assert.equal(explorerTxUrl("Pearl testnet", TXID), `https://blockbook.testnet.pearlresearch.ai/tx/${TXID}`);
+  assert.equal(explorerTxUrl("Pearl testnet", TXID), `https://blockbook.testnet2.pearlnetwork.net/tx/${TXID}`);
   assert.equal(explorerTxUrl("Pearl regtest", TXID), "");
   assert.equal(explorerTxUrl("Pearl testnet", "zz"), "");
 
@@ -672,7 +672,7 @@ test("view-transaction links follow the network the transaction was sent on", as
   const statusDoc = freshDocument();
   const statusApp = mount(statusDoc, { vault: unlockedVault(), storage: stored(statusDrafts) });
   await statusApp.ready;
-  assert.equal(statusDoc.getElementById("viewTx").dataset.url, `https://blockbook.testnet.pearlresearch.ai/tx/${TXID}`);
+  assert.equal(statusDoc.getElementById("viewTx").dataset.url, `https://blockbook.testnet2.pearlnetwork.net/tx/${TXID}`);
 
   const txDrafts = draftStore({
     v: 1, at: Date.now(), screen: "screen-tx", flow: "tx", txid: TXID, direction: "out",
@@ -681,5 +681,5 @@ test("view-transaction links follow the network the transaction was sent on", as
   const txDoc = freshDocument();
   const txApp = mount(txDoc, { vault: unlockedVault(), storage: stored(txDrafts) });
   await txApp.ready;
-  assert.equal(txDoc.getElementById("viewTxDetail").dataset.url, `https://blockbook.testnet.pearlresearch.ai/tx/${TXID}`);
+  assert.equal(txDoc.getElementById("viewTxDetail").dataset.url, `https://blockbook.testnet2.pearlnetwork.net/tx/${TXID}`);
 });

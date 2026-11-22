@@ -8,7 +8,7 @@ const MAINNET = "Pearl mainnet";
 const TESTNET = "Pearl testnet";
 const DEFAULT_ORIGIN = DEFAULT_INDEXERS[0];
 // The official desktop "testnet" actually runs --testnet2. The public indexer is Testnet2 as well.
-export const DEFAULT_TESTNET_ORIGIN = "https://blockbook.testnet.pearlresearch.ai";
+export const DEFAULT_TESTNET_ORIGIN = "https://blockbook.testnet2.pearlnetwork.net";
 
 const ORIGIN_RE = /^https?:\/\/(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9.-]+)(?::\d{1,5})?$/;
 
@@ -121,8 +121,12 @@ export function indexerPermissionOrigin(origin) {
   return `${origin}/*`;
 }
 
+const LEGACY_TESTNET_ORIGIN = "https://blockbook.testnet.pearlresearch.ai";
+
 export function needsOptionalHostPermission(origin) {
-  return origin !== DEFAULT_ORIGIN && origin !== DEFAULT_TESTNET_ORIGIN;
+  return origin !== DEFAULT_ORIGIN
+    && origin !== DEFAULT_TESTNET_ORIGIN
+    && origin !== LEGACY_TESTNET_ORIGIN;
 }
 
 export { MAINNET as NETWORK_MAINNET, TESTNET as NETWORK_TESTNET, DEFAULT_ORIGIN, ORIGIN_RE };

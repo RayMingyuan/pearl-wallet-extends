@@ -35,3 +35,13 @@ test("t follows setLocale and applyDom updates fragment text", () => {
   applyDom(document);
   assert.equal(document.querySelector("[data-i18n]").textContent, catalogs.en["nav.settings"]);
 });
+
+test("en and zh catalogs share the same keys including update copy", () => {
+  const enKeys = Object.keys(catalogs.en).sort();
+  const zhKeys = Object.keys(catalogs.zh).sort();
+  assert.deepEqual(zhKeys, enKeys);
+  assert.ok(enKeys.includes("settings.version"));
+  assert.ok(enKeys.includes("update.reload"));
+  assert.match(t("update.banner", { version: "1.0.2" }, "en"), /1\.0\.2/);
+  assert.match(t("update.banner", { version: "1.0.2" }, "zh"), /1\.0\.2/);
+});

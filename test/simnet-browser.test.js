@@ -150,6 +150,7 @@ test("both built packages have separate permissions and classic scripts", () => 
   assert.deepEqual(normal.host_permissions, [
     "https://blockbook.pearlresearch.ai/*",
     "https://blockbook.testnet.pearlresearch.ai/*",
+    "https://blockbook.testnet2.pearlnetwork.net/*",
     "https://api.coinbase.com/*",
     "https://api.exchange.coinbase.com/*",
     "https://api.coingecko.com/*",

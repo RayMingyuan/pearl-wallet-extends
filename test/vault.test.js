@@ -270,7 +270,7 @@ test("noteBook stores cursors with the unlock session and still opens after a pa
   h.vault.lock();
 });
 
-test("noteBook refuses a new watch address until the password decrypts, and still stores cursors without one", async () => {
+test("noteBook ignores watch rows and keeps them out of the sealed directory", async () => {
   const h = harness();
   await h.vault.init();
   await h.vault.save("hex", fixture.seedHex, password);
@@ -288,15 +288,15 @@ test("noteBook refuses a new watch address until the password decrypts, and stil
       { id: "w1", name: "观察", kind: "watch", address: watched },
     ],
   };
-  await assert.rejects(() => h.vault.noteBook(withWatch), errLike(/Wrong password/));
-  assert.equal(h.vault.directory().watch.length, 0);
-  await h.vault.noteBook(withWatch, password);
-  assert.equal(h.vault.directory().watch[0].address, watched);
+  await h.vault.noteBook(withWatch);
+  assert.deepEqual(h.vault.directory().watch, []);
+  assert.equal(h.vault.projectedBook("w1").items.some((item) => item.kind === "watch"), false);
   await h.vault.noteBook({
     ...withWatch,
     items: [{ ...book.items[0], receiveIndex: 5 }, withWatch.items[1]],
   });
   assert.equal(h.vault.directory().accounts[0].receiveNext, 5);
+  assert.deepEqual(h.vault.directory().watch, []);
   h.vault.lock();
 });
 
