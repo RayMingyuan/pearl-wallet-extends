@@ -1,9 +1,11 @@
 import { err } from "./i18n.js";
+import { bindDeadline } from "./abort-deadline.js";
 import { parseSignedGrain, parseUnsignedGrain } from "./amount.js";
 import { interpretTransactions } from "./activity.js";
 import { taprootScript, verifyUtxos } from "./transaction.js";
 
 export const BLOCKBOOK_ORIGIN = "https://blockbook.pearlresearch.ai";
+const INDEXER_TIMEOUT_MS = 8_000;
 
 export class BlockbookError extends Error {
   constructor(message, { kind, status = 0 } = {}) {
@@ -87,7 +89,7 @@ export async function fetchWatchAddress(address, {
       headers: { Accept: "application/json" },
       cache: "no-store",
       referrerPolicy: "no-referrer",
-      signal,
+      signal: bindDeadline(signal, INDEXER_TIMEOUT_MS),
     });
   } catch (error) {
     if (error?.name === "AbortError") throw error;
@@ -108,7 +110,11 @@ export async function fetchSpendableUtxos(address, { fetchImpl = globalThis.fetc
   taprootScript(address, network);
   const request = async (path) => {
     const response = await fetchImpl(`${origin}/api/v2/${path}`, {
-      method: "GET", headers: { Accept: "application/json" }, cache: "no-store", referrerPolicy: "no-referrer", signal,
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+      signal: bindDeadline(signal, INDEXER_TIMEOUT_MS),
     });
     if (!response.ok) throw err("err.blockbook.utxoHttp", { status: response.status });
     const text = await response.text();

@@ -37,6 +37,7 @@ async function askPopupDraft(op, draft) {
 
 const BOOK_KEY = "prlAccountBook";
 const IDLE_KEY = "prlIdleMin";
+const HOME_SNAPSHOT_KEY = "prlHomeSnapshot";
 
 function showBootError(message) {
   const el = document.getElementById("boot-state");
@@ -88,6 +89,17 @@ try {
       const next = normalizeLocale(locale);
       await invokeStore(chromeStorage, "set", [{ [LOCALE_KEY]: next }], 4000);
       return next;
+    },
+    async getHomeSnapshots() {
+      const session = globalThis.chrome?.storage?.session;
+      if (!session?.get) return null;
+      const got = await invokeStore(session, "get", [HOME_SNAPSHOT_KEY], 4000);
+      return got?.[HOME_SNAPSHOT_KEY] ?? null;
+    },
+    async setHomeSnapshots(value) {
+      const session = globalThis.chrome?.storage?.session;
+      if (!session?.set) return;
+      await invokeStore(session, "set", [{ [HOME_SNAPSHOT_KEY]: value }], 4000);
     },
     getPopupDraft() { return askPopupDraft("get"); },
     setPopupDraft(draft) { return askPopupDraft("set", draft); },

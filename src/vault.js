@@ -61,22 +61,75 @@ export function createVault({ storage, crypto = globalThis.crypto, idleMs = IDLE
   let packed = null;
   let sealingKey = null;
   let timer;
+  let ticketTimer;
   let deadline = 0;
+  // Send grace keeps the binary seed until this time. The password and mnemonic plaintext are not kept.
+  let sendTicketUntil = 0;
   let generation = 0;
   let unlockedCiphertext = null;
   const listeners = new Set();
   const notify = (event) => { for (const listener of listeners) listener(event); };
-  function lock() {
-    generation += 1;
-    cancel(timer);
-    seed?.fill(0);
-    seed = null;
+  function releaseMnemonic() {
     packed?.fill(0);
     packed = null;
     sealingKey = null;
     unlockedCiphertext = null;
+  }
+  function ticketLive() {
+    return Boolean(seed) && now() < sendTicketUntil;
+  }
+  function sessionOpen() {
+    return Boolean(seed) && now() < deadline;
+  }
+  function lock() {
+    // Idle or an explicit lock during send grace drops the mnemonic plaintext and the UI session.
+    // The binary seed stays until the grace timer, so a later send does not need the password.
+    if (ticketLive()) {
+      releaseMnemonic();
+      cancel(timer);
+      deadline = 0;
+      notify("lock");
+      return;
+    }
+    generation += 1;
+    cancel(timer);
+    cancel(ticketTimer);
+    sendTicketUntil = 0;
+    seed?.fill(0);
+    seed = null;
+    releaseMnemonic();
     deadline = 0;
     notify("lock");
+  }
+  function syncDeadlines() {
+    if (sendTicketUntil && now() >= sendTicketUntil) {
+      sendTicketUntil = 0;
+      cancel(ticketTimer);
+    }
+    if (!deadline || now() < deadline) return;
+    if (ticketLive()) {
+      releaseMnemonic();
+      cancel(timer);
+      deadline = 0;
+      notify("lock");
+      return;
+    }
+    if (seed) lock();
+  }
+  function armSendTicket(minutes) {
+    const mins = Number(minutes);
+    if (!sessionOpen() || !Number.isInteger(mins) || mins < 1 || mins > 30) return;
+    sendTicketUntil = now() + mins * 60_000;
+    cancel(ticketTimer);
+    ticketTimer = schedule(() => {
+      sendTicketUntil = 0;
+      if (!sessionOpen()) lock();
+    }, mins * 60_000);
+  }
+  function clearSendTicket() {
+    sendTicketUntil = 0;
+    cancel(ticketTimer);
+    if (seed && !sessionOpen()) lock();
   }
   function touch() {
     if (!seed) return;
@@ -164,7 +217,12 @@ export function createVault({ storage, crypto = globalThis.crypto, idleMs = IDLE
     return locks.request("pearl-pocket-vault", { mode: "exclusive" }, work);
   }
   return {
-    get status() { return { exists, ready, busy, unlocked: Boolean(seed) && now() < deadline }; },
+    get status() {
+      syncDeadlines();
+      return { exists, ready, busy, unlocked: sessionOpen(), sendAuth: ticketLive() };
+    },
+    armSendTicket,
+    clearSendTicket,
     get network() { return network; },
     // A network switch is allowed while unlocked: only the derivation parameters change, not the seed. Mainnet and testnet addresses differ because their coin types differ.
     switchNetwork(next) {
@@ -293,8 +351,9 @@ export function createVault({ storage, crypto = globalThis.crypto, idleMs = IDLE
       return { current: active, items };
     },
     address(branch = 0, index = 0, account = 0) {
-      if (!seed || now() >= deadline) { lock(); throw err("err.vault.unlockRequired"); }
-      touch();
+      syncDeadlines();
+      if (!seed || (!sessionOpen() && !ticketLive())) { lock(); throw err("err.vault.unlockRequired"); }
+      if (sessionOpen()) touch();
       return deriveAddress(seed, branch, index, network, account);
     },
     async addPrivateKey(password, keyText, id) {
@@ -430,7 +489,11 @@ export function createVault({ storage, crypto = globalThis.crypto, idleMs = IDLE
       return (secret.imports || []).map((item) => ({ id: item.id, address: item.address }));
     },
     signTransaction(draft) {
-      if (busy || !seed || now() >= deadline) { lock(); throw err("err.vault.unlockConfirmDraft"); }
+      syncDeadlines();
+      if (busy || !seed || (!sessionOpen() && !ticketLive())) {
+        lock();
+        throw err("err.vault.unlockConfirmDraft");
+      }
       try {
         const checked = validateDraft(draft);
         if (checked.network !== network) throw err("err.vault.txNetworkSessionMismatch");
@@ -451,7 +514,11 @@ export function createVault({ storage, crypto = globalThis.crypto, idleMs = IDLE
           )[0];
         });
         return finalizeTransaction(checked, signatures);
-      } finally { lock(); }
+      } finally {
+        // Grace keeps the seed. A fully open session stays open until the idle timer.
+        if (ticketLive() && sessionOpen()) touch();
+        else if (!ticketLive()) lock();
+      }
     },
     async remove() {
       return exclusive(() => mutate(async () => {

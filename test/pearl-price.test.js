@@ -21,8 +21,8 @@ test("parses spot amount without floats", () => {
 });
 
 test("formats wallet USD total and spot caption", () => {
-  assert.equal(formatUsdTotal(200_000_000n, "0.5"), "$1.00");
-  assert.equal(formatUsdTotal(199_139_538n, "0.05"), "$0.0996");
+  assert.equal(formatUsdTotal(200_000_000n, "0.5"), "≈ $1.00");
+  assert.equal(formatUsdTotal(199_139_538n, "0.05"), "≈ $0.0996");
   assert.equal(formatUsdSpot("1.54"), "$1.54");
   assert.equal(
     formatSpotCaption({ amount: "1.54", scaled: 154n, scale: 2, source: "coingecko" }),
@@ -70,5 +70,5 @@ test("fetchPearlUsdSpot uses Coinbase Exchange when available", async () => {
   });
   assert.equal(spot.source, "coinbase");
   assert.equal(spot.amount, "1.559");
-  assert.equal(formatUsdTotal(100_000_000n, spot), "$1.56");
+  assert.equal(formatUsdTotal(100_000_000n, spot), "≈ $1.56");
 });

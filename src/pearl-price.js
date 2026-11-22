@@ -24,7 +24,7 @@ export function parseUsdSpotAmount(amount, source = "unknown") {
   });
 }
 
-/** grains × USD/PEARL, as a display dollar string. The main path does not use float. */
+/** grains × USD/PEARL, as an estimated wallet total (≈ $…). The main path does not use float. */
 export function formatUsdTotal(grains, spotAmount) {
   if (typeof grains !== "bigint" || grains < 0n) throw err("err.price.balanceMustBeNonNegGrain");
   const price = typeof spotAmount === "string" ? parseUsdSpotAmount(spotAmount) : spotAmount;
@@ -34,7 +34,7 @@ export function formatUsdTotal(grains, spotAmount) {
   const scale = BigInt(price.scale);
   const denom = GRAIN_PER_PRL * (10n ** scale);
   const micros = (grains * price.scaled * 100_000_000n + denom / 2n) / denom;
-  return formatUsdMicros(micros);
+  return `≈ ${formatUsdMicros(micros)}`;
 }
 
 export function formatUsdSpot(spotAmount) {

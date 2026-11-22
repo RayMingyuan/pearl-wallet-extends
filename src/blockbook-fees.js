@@ -1,4 +1,5 @@
 import { err } from "./i18n.js";
+import { bindDeadline } from "./abort-deadline.js";
 import { BLOCKBOOK_ORIGIN } from "./blockbook.js";
 
 // btcd/bitcoind estimatefee returns coin per kilobyte. Blockbook passes that
@@ -60,25 +61,26 @@ function substituteRate(name, origin) {
   return FEE_FALLBACK[name];
 }
 
-async function estimateOne(fetchImpl, origin, blocks) {
+async function estimateOne(fetchImpl, origin, blocks, timeoutMs) {
   const response = await fetchImpl(`${origin}/api/v2/estimatefee/${blocks}`, {
     method: "GET",
     headers: { Accept: "application/json" },
     cache: "no-store",
     referrerPolicy: "no-referrer",
+    signal: bindDeadline(undefined, timeoutMs),
   });
   const body = JSON.parse(await response.text());
   if (!response.ok) throw err("err.blockbook.feeHttp");
   return prlPerKvBToGrainPerVb(body.result);
 }
 
-export async function fetchFeeMenu(fetchImpl = globalThis.fetch, origin = BLOCKBOOK_ORIGIN) {
+export async function fetchFeeMenu(fetchImpl = globalThis.fetch, origin = BLOCKBOOK_ORIGIN, { timeoutMs = 5_000 } = {}) {
   if (feeCache && feeCache.origin === origin && Date.now() - feeCache.at < FEE_MENU_CACHE_MS) {
     return feeCache.result;
   }
   const entries = await Promise.all(Object.entries(FEE_BLOCKS).map(async ([name, count]) => {
     try {
-      return [name, await estimateOne(fetchImpl, origin, count), false];
+      return [name, await estimateOne(fetchImpl, origin, count, timeoutMs), false];
     } catch {
       return [name, substituteRate(name, origin), true];
     }

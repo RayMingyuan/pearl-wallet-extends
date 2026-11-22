@@ -16,6 +16,29 @@ test("scanChain keeps previous cursor when a query fails", async () => {
   assert.deepEqual(result, { next: 4, scanned: false });
 });
 
+test("scanChain probes a gap window in parallel", async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const result = await scanChain(async () => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    inFlight -= 1;
+    return false;
+  }, 8, 0);
+  assert.equal(result.scanned, true);
+  assert.equal(result.next, 0);
+  assert.ok(peak >= 8);
+});
+
+test("scanChain keeps a finished gap when a later probe in the batch fails", async () => {
+  const result = await scanChain(async (index) => {
+    if (index >= 2) throw new Error("tail");
+    return false;
+  }, 2, 0);
+  assert.deepEqual(result, { next: 0, scanned: true });
+});
+
 test("scanChain stops when the address query is aborted", async () => {
   const error = new DOMException("查询已取消", "AbortError");
   await assert.rejects(() => scanChain(async (index) => {

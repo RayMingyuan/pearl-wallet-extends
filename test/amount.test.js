@@ -18,7 +18,7 @@ test("formats grain integers without floating point", () => {
   assert.equal(formatGrains(-5n), "-0.00000005");
 });
 
-test("formats compact grains for list and home displays", () => {
+test("formats compact grains for activity list displays", () => {
   assert.equal(formatGrainsCompact(199_139_538n), "1.9914");
   assert.equal(formatGrainsCompact(100_860_154n), "1.0086");
   assert.equal(formatGrainsCompact(200_000_000n), "2");
