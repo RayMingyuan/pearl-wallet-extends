@@ -102,27 +102,6 @@ export function swapNetworkCursors(items, buckets, fromNetwork, toNetwork) {
   return { items: updated, buckets: nextBuckets };
 }
 
-function watchIdentity(book) {
-  return (book?.items || [])
-    .filter((item) => item.kind === "watch")
-    .map((item) => `${item.id}:${item.address}`)
-    .sort()
-    .join("\n");
-}
-
-function watchRewritten(previous, next) {
-  const before = new Map((previous?.items || []).filter((item) => item.kind === "watch").map((item) => [item.id, item.address]));
-  return (next?.items || []).some((item) => item.kind === "watch" && (!before.has(item.id) || before.get(item.id) !== item.address));
-}
-
-function selectsWatch(previous, next) {
-  if (!next || previous?.current === next.current) return false;
-  const nextWatch = (next.items || []).some((item) => item.id === next.current && item.kind === "watch");
-  if (!nextWatch) return false;
-  const removedCurrent = !(next.items || []).some((item) => item.id === previous?.current);
-  return !removedCurrent;
-}
-
 export function mountShell(document, {
   vault, storage, fetchAddress, fetchUtxos, broadcaster, estimateFees = fetchFeeMenu,
   copyText, drawQr, mainnetStore = null, spendGuard = createSpendGuard({ storage }),
@@ -167,6 +146,8 @@ export function mountShell(document, {
     paintLocaleChrome();
     paintNetChrome();
     paintRemove();
+    paintAppVersion();
+    paintUpdateBanner();
     paintIdle?.();
     paintFiat?.();
     paintBalance?.();
@@ -201,6 +182,7 @@ export function mountShell(document, {
     "screen-welcome", "screen-home", "screen-done", "screen-activity", "screen-receive",
     "screen-settings", "screen-privacy", "screen-donate", "screen-rename", "screen-idle",
     "screen-addresses",
+    "screen-accounts-preview",
     "screen-structure",
   ]);
   function beginReads() {
@@ -222,8 +204,9 @@ export function mountShell(document, {
   const state = {
     screen: "screen-welcome", flow: "create", password: "", mnemonic: "", mnemonicWords: 12, secret: "", fee: "fast",
     rates: { slow: 1, standard: 10, fast: 100 }, feeFallback: false, feeNote: "", custom: false, draft: null, txid: "",
+    updatePendingVersion: "",
     book: { current: "d0", items: [] }, hidden: false, busy: false, balance: null,
-    rows: [], activityError: "", pendingAdd: "", pendingWatch: "", pendingWatchId: "", idleMin: 5,
+    rows: [], activityError: "", pendingAdd: "", pendingWatch: "", idleMin: 5,
     cursorBuckets: {},
     savedBook: { current: "d0", items: [] },
     cursorFresh: Object.create(null),
@@ -241,6 +224,7 @@ export function mountShell(document, {
     netDraft: null,
     netCustomOpen: false,
     idleCustomOpen: false,
+    structureAccountId: "",
   };
   function activeNetwork() {
     return state.networkPrefs.networkId || NETWORK_MAINNET;
@@ -280,8 +264,8 @@ export function mountShell(document, {
     q("screen-unlock").hidden = true;
     q("screen-account-pw").hidden = true;
     q("screen-remove").hidden = true;
-    const home = id === "screen-home";
-    q("topBar").hidden = !home;
+    const showTop = id === "screen-home" || id === "screen-activity" || id === "screen-settings";
+    q("topBar").hidden = !showTop;
     q("bottomNav").hidden = !["screen-home", "screen-activity", "screen-settings", "screen-receive"].includes(id);
     const tab = id === "screen-receive" ? "screen-home" : id;
     document.querySelectorAll("#bottomNav button").forEach((button) => {
@@ -296,6 +280,7 @@ export function mountShell(document, {
     sheet(false);
     if (id === "screen-activity") renderActivity(q("activityList"), state.rows, "screen-activity");
     if (id === "screen-settings") paintSettings();
+    if (id === "screen-accounts-preview") void paintAccountsPreview();
     if (id === "screen-idle") paintIdle();
     if (id === "screen-rename" && currentItem()) q("renameInput").value = currentItem().name;
     if (id !== "screen-receive") pickSheet(false);
@@ -427,13 +412,7 @@ export function mountShell(document, {
   async function saveBook(password) {
     const next = validateBook(state.book);
     const previous = state.savedBook;
-    const watchWrite = watchRewritten(previous, next);
-    const watchSelect = selectsWatch(previous, next);
     try {
-      if (watchWrite || watchSelect) {
-        if (!password) throw new Error(t("unlock.addNeedsPassword"));
-        if (!vault.status.unlocked || (watchSelect && !watchWrite)) await ensureUnlockedWithPassword(password);
-      }
       if (vault.status.unlocked && typeof vault.noteBook === "function") {
         await vault.noteBook(next, password);
       }
@@ -478,6 +457,7 @@ export function mountShell(document, {
   async function syncBookFromVault() {
     if (!vault.status.unlocked || typeof vault.projectedBook !== "function") return;
     try {
+      const previousCurrent = state.book.current;
       const projected = validateBook(await vault.projectedBook(state.book.current));
       const byId = new Map(state.book.items.map((item) => [item.id, item]));
       for (const item of projected.items) {
@@ -490,11 +470,45 @@ export function mountShell(document, {
           item.changeIndex = Math.max(item.changeIndex || 0, prev.changeIndex || 0);
         }
       }
-      // Until the sealed directory catches up, keep only derived accounts from the local book. An unsealed watch address must not be written back from that book.
+      // Local-only rows the sealed vault does not own: derived drafts not yet committed, and all watch addresses.
       for (const item of state.book.items) {
         if (item.kind === "derived" && !projected.items.some((entry) => entry.id === item.id)) {
           projected.items.push(item);
         }
+      }
+      const watches = [];
+      const seenWatch = new Set();
+      const takeWatch = (item) => {
+        if (!item || item.kind !== "watch" || typeof item.address !== "string" || !item.address) return;
+        const key = item.id || item.address;
+        if (seenWatch.has(key) || seenWatch.has(item.address)) return;
+        seenWatch.add(key);
+        seenWatch.add(item.address);
+        watches.push({
+          id: item.id || `w${item.address}`,
+          name: item.name || t("account.watchAddress"),
+          kind: "watch",
+          address: item.address,
+        });
+      };
+      for (const item of state.book.items) takeWatch(item);
+      // Older installs sealed watch rows inside the vault; lift them into the plaintext book once.
+      if (typeof vault.directory === "function") {
+        try {
+          const directory = await vault.directory();
+          for (const item of directory?.watch || []) {
+            takeWatch({
+              id: item.id,
+              name: item.name,
+              kind: "watch",
+              address: item.address,
+            });
+          }
+        } catch { /* Ignore legacy watch migration failures. */ }
+      }
+      projected.items.push(...watches);
+      if (previousCurrent && projected.items.some((item) => item.id === previousCurrent)) {
+        projected.current = previousCurrent;
       }
       state.book = validateBook(projected);
       await saveBook();
@@ -1258,8 +1272,6 @@ export function mountShell(document, {
     const short = profile === "custom" ? t("net.custom") : profile === "testnet" ? t("net.testnet") : t("net.mainnet");
     const hint = q("netRowHint");
     if (hint) hint.textContent = short;
-    const badge = q("settingsNetBadge");
-    if (badge) badge.textContent = short;
     const homeLabel = q("netDotLabel");
     if (homeLabel) homeLabel.textContent = short;
     const welcomeLabel = q("welcomeNetLabel");
@@ -1340,12 +1352,25 @@ export function mountShell(document, {
       show(back === "screen-welcome" ? "screen-welcome" : "screen-settings");
       return;
     }
-    if (back === "screen-home" && (vault.status.unlocked || currentItem()?.address)) {
+    const canBrowse = vault.status.unlocked || Boolean(currentItem()?.address);
+    if (prevNetwork !== state.networkPrefs.networkId && canBrowse) {
       await openHome();
       return;
     }
-    show("screen-settings");
-    if (vault.status.unlocked || currentItem()?.address) await openHome();
+    if (back === "screen-activity" && canBrowse) {
+      await openActivity();
+      return;
+    }
+    if (back === "screen-home" && canBrowse) {
+      await openHome();
+      return;
+    }
+    if (back === "screen-settings") {
+      show("screen-settings");
+      return;
+    }
+    if (canBrowse) await openHome();
+    else show("screen-settings");
   }
   function donationConfigured() {
     return typeof DONATION_ADDRESS === "string" && /^prl1[a-z0-9]+$/i.test(DONATION_ADDRESS.trim());
@@ -1357,11 +1382,121 @@ export function mountShell(document, {
     q("copyDonate").disabled = !address;
     q("donateHint").textContent = t("donate.hint");
   }
+  const UPDATE_PENDING_KEY = "pearlUpdatePending";
+  function readAppVersion() {
+    try {
+      const version = globalThis.chrome?.runtime?.getManifest?.()?.version;
+      return typeof version === "string" && version.trim() ? version.trim() : "";
+    } catch {
+      return "";
+    }
+  }
+  function paintAppVersion() {
+    const version = readAppVersion();
+    const appVersion = q("appVersion");
+    if (appVersion) appVersion.textContent = version || "—";
+  }
+  function paintUpdateBanner() {
+    const banner = q("updateBanner");
+    const text = q("updateBannerText");
+    if (!banner || !text) return;
+    const pending = state.updatePendingVersion;
+    if (!pending) {
+      banner.hidden = true;
+      text.textContent = "";
+      return;
+    }
+    banner.hidden = false;
+    text.textContent = t("update.banner", { version: pending });
+  }
+  async function loadPendingUpdate() {
+    const session = globalThis.chrome?.storage?.session;
+    if (!session?.get) return;
+    try {
+      const got = await session.get(UPDATE_PENDING_KEY);
+      const version = got?.[UPDATE_PENDING_KEY];
+      if (typeof version === "string" && version.trim()) {
+        state.updatePendingVersion = version.trim();
+      }
+    } catch { /* Session storage may be unavailable in tests. */ }
+  }
+  async function rememberPendingUpdate(version) {
+    if (typeof version !== "string" || !version.trim()) return;
+    state.updatePendingVersion = version.trim();
+    paintUpdateBanner();
+    try {
+      await globalThis.chrome?.storage?.session?.set?.({ [UPDATE_PENDING_KEY]: state.updatePendingVersion });
+    } catch { /* Ignore session write failures. */ }
+  }
+  function noteUpdateHint(message) {
+    const el = q("updateHint");
+    if (!el) return;
+    el.hidden = !message;
+    el.textContent = message || "";
+  }
+  async function checkForExtensionUpdate() {
+    const runtime = globalThis.chrome?.runtime;
+    if (typeof runtime?.requestUpdateCheck !== "function") {
+      noteUpdateHint(t("update.unavailable"));
+      return;
+    }
+    noteUpdateHint(t("update.checking"));
+    try {
+      const result = await runtime.requestUpdateCheck();
+      const status = typeof result === "string" ? result : result?.status;
+      const version = typeof result === "object" && result ? result.version : "";
+      if (status === "no_update") {
+        noteUpdateHint(t("update.noUpdate"));
+        return;
+      }
+      if (status === "throttled") {
+        noteUpdateHint(t("update.throttled"));
+        return;
+      }
+      if (status === "update_available") {
+        if (version) await rememberPendingUpdate(version);
+        noteUpdateHint(t("update.available"));
+        return;
+      }
+      noteUpdateHint(t("update.checkFailed"));
+    } catch {
+      noteUpdateHint(t("update.checkFailed"));
+    }
+  }
+  function installUpdateListeners() {
+    const runtime = globalThis.chrome?.runtime;
+    if (typeof runtime?.onUpdateAvailable?.addListener === "function") {
+      runtime.onUpdateAvailable.addListener((details) => {
+        void rememberPendingUpdate(details?.version);
+        if (state.screen === "screen-settings") {
+          noteUpdateHint("");
+          paintUpdateBanner();
+        } else {
+          toast(t("update.banner", { version: details?.version || "" }));
+        }
+      });
+    }
+  }
   function paintSettings() {
     const idle = q("idleValue");
     if (idle) idle.textContent = t("idle.value", { min: state.idleMin });
     paintNetChrome();
     paintRemove();
+    paintAppVersion();
+    paintUpdateBanner();
+    void loadPendingUpdate().then(() => {
+      if (state.screen === "screen-settings") paintUpdateBanner();
+    });
+  }
+  function itemUsableOnActiveNetwork(item) {
+    if (!item) return false;
+    if (item.kind === "derived") return true;
+    return Boolean(item.address && checkAddress(item.address).ok);
+  }
+  function preferUsableCurrent() {
+    if (itemUsableOnActiveNetwork(currentItem())) return;
+    const next = (state.book.items || []).find((item) => itemUsableOnActiveNetwork(item));
+    state.book.current = next?.id || state.book.items[0]?.id || "d0";
   }
   async function rederiveAfterNetworkChange({ chainChanged = true, previousNetwork = "" } = {}) {
     clearHomeCache();
@@ -1373,17 +1508,14 @@ export function mountShell(document, {
     const swapped = swapNetworkCursors(state.book.items, state.cursorBuckets, previousNetwork || activeNetwork(), activeNetwork());
     state.cursorBuckets = swapped.buckets;
     state.book.items = swapped.items;
+    // Watch/key rows are plaintext bookmarks — never drop them on a chain switch just because
+    // the HRP does not match. Park the active selection onto a usable account instead.
     if (!vault.status.unlocked) {
       // Derivation requires an unlock. Clear derived addresses so an old-chain address is not shown on the new indexer.
       for (const item of state.book.items) {
         if (item.kind === "derived") item.address = "";
       }
-      state.book.items = state.book.items.filter((item) => (
-        item.kind === "derived" || (item.address && checkAddress(item.address).ok)
-      ));
-      if (!state.book.items.some((item) => item.id === state.book.current)) {
-        state.book.current = state.book.items[0]?.id || "d0";
-      }
+      preferUsableCurrent();
       await saveBook();
       return;
     }
@@ -1391,15 +1523,7 @@ export function mountShell(document, {
       if (item.kind !== "derived") continue;
       item.address = await vault.address(0, 0, item.account);
     }
-    const kept = [];
-    for (const item of state.book.items) {
-      if (item.kind === "derived") { kept.push(item); continue; }
-      if (item.address && checkAddress(item.address).ok) kept.push(item);
-    }
-    state.book.items = kept;
-    if (!kept.some((item) => item.id === state.book.current)) {
-      state.book.current = kept[0]?.id || "d0";
-    }
+    preferUsableCurrent();
     await saveBook();
   }
 
@@ -2130,11 +2254,6 @@ export function mountShell(document, {
       meta.append(name, addr);
       pick.append(mark, meta);
       pick.addEventListener("click", async () => {
-        if (item.kind === "watch" && item.id !== state.book.current) {
-          state.pendingWatchId = item.id;
-          askPassword("select-watch");
-          return;
-        }
         state.book.current = item.id;
         await saveBook();
         sheet(false);
@@ -2147,33 +2266,57 @@ export function mountShell(document, {
       edit.className = "icon";
       edit.setAttribute("aria-label", t("accounts.renameAria"));
       edit.append(svgIcon(PENCIL));
-      edit.addEventListener("click", () => {
+      edit.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (row.querySelector(".name-edit")) return;
+        // Keep the input outside acct-main (a <button>). Nested inputs inside buttons
+        // blur/activate unpredictably when the user selects or taps text.
         const input = document.createElement("input");
+        input.type = "text";
         input.value = item.name;
         input.maxLength = 24;
         input.className = "name-edit";
         input.setAttribute("aria-label", t("accounts.nameAria"));
-        meta.replaceChildren(input);
-        input.focus();
-        input.select();
+        pick.hidden = true;
+        row.insertBefore(input, tools);
         let cancel = false;
-        const restore = () => meta.replaceChildren(name, addr);
-        input.addEventListener("keydown", (event) => {
-          if (event.key === "Enter") { event.preventDefault(); input.blur(); }
-          if (event.key === "Escape") { cancel = true; input.blur(); }
+        let closed = false;
+        const restore = () => {
+          if (closed) return;
+          closed = true;
+          input.remove();
+          pick.hidden = false;
+        };
+        input.addEventListener("keydown", (keyEvent) => {
+          if (keyEvent.key === "Enter") { keyEvent.preventDefault(); input.blur(); }
+          if (keyEvent.key === "Escape") { cancel = true; input.blur(); }
         });
-        input.addEventListener("blur", async () => {
+        input.addEventListener("click", (clickEvent) => clickEvent.stopPropagation());
+        input.addEventListener("pointerdown", (pointerEvent) => pointerEvent.stopPropagation());
+        input.addEventListener("blur", () => {
           if (cancel) { restore(); return; }
           const next = input.value.trim().slice(0, 24);
-          if (next) {
-            item.name = next;
-            name.textContent = next;
-            await saveBook();
-            if (currentItem()?.id === item.id) q("switchName").textContent = next;
-            toast(t("toast.nameSaved"));
-          }
+          const previous = item.name;
           restore();
+          if (!next || next === previous) return;
+          item.name = next;
+          name.textContent = next;
+          if (currentItem()?.id === item.id) q("switchName").textContent = next;
+          void saveBook().then(() => toast(t("toast.nameSaved"))).catch(() => {
+            item.name = previous;
+            name.textContent = previous;
+            if (currentItem()?.id === item.id) q("switchName").textContent = previous;
+          });
         });
+        // Focus without select-all so a selection gesture cannot race the blur/save path.
+        const focusEdit = () => {
+          input.focus();
+          const caret = input.value.length;
+          try { input.setSelectionRange(caret, caret); } catch { /* Some hosts reject setSelectionRange. */ }
+        };
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusEdit);
+        else queueMicrotask(focusEdit);
       });
       tools.append(edit);
       if (item.kind === "watch") {
@@ -2280,8 +2423,6 @@ export function mountShell(document, {
       note("sheetPwError", "");
       q("screen-account-pw").hidden = true;
       if (state.pendingAdd === "derived") await beginDerived();
-      else if (state.pendingAdd === "watch") await finishWatch(password);
-      else if (state.pendingAdd === "select-watch") await finishSelectWatch(password);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       const spoken = passwordUserMessage(message, "toast.addFailed");
@@ -2561,24 +2702,92 @@ export function mountShell(document, {
     }
     return { receive, change };
   }
+  function structureTargetItem() {
+    const id = state.structureAccountId;
+    if (id) {
+      const found = (state.book.items || []).find((item) => item.id === id);
+      if (found) return found;
+    }
+    return currentItem();
+  }
+  function previewKindLabel(kind) {
+    if (kind === "watch") return t("preview.kind.watch");
+    if (kind === "key") return t("preview.kind.key");
+    return t("preview.kind.derived");
+  }
+  async function paintAccountsPreview() {
+    const list = q("accountsPreviewList");
+    const empty = q("accountsPreviewEmpty");
+    list.replaceChildren();
+    // Account preview is the mnemonic HD model only. Watch-only rows live in the
+    // plaintext book and are managed from the account drawer, not this overview.
+    const items = (state.book.items || []).filter((item) => item.kind === "derived" || item.kind === "key");
+    empty.hidden = items.length > 0;
+    empty.textContent = t("preview.empty");
+    for (const item of items) {
+      const card = document.createElement("div");
+      card.className = "addr-row preview-row";
+      const main = document.createElement("button");
+      main.type = "button";
+      main.className = "addr-row-main";
+      main.setAttribute("aria-label", t("preview.openStructureAria"));
+      const title = document.createElement("b");
+      title.textContent = item.name || t("account.default");
+      const addr = document.createElement("small");
+      addr.textContent = peekReceiveAddress(item) || item.address || "—";
+      const tags = document.createElement("div");
+      tags.className = "addr-row-tags";
+      const kindChip = document.createElement("span");
+      kindChip.className = "addr-tag";
+      kindChip.textContent = previewKindLabel(item.kind);
+      tags.append(kindChip);
+      if (item.id === state.book.current) {
+        const currentChip = document.createElement("span");
+        currentChip.className = "addr-tag used";
+        currentChip.textContent = t("preview.current");
+        tags.append(currentChip);
+      }
+      main.append(title, addr, tags);
+      main.addEventListener("click", () => { void openAccountStructure(item.id); });
+      const chev = document.createElement("span");
+      chev.className = "preview-chev";
+      chev.setAttribute("aria-hidden", "true");
+      chev.append(svgIcon("m9 6 6 6-6 6"));
+      card.append(main, chev);
+      list.append(card);
+    }
+  }
+  async function openAccountsPreview() {
+    show("screen-accounts-preview");
+    await paintAccountsPreview();
+  }
   async function paintAccountStructure() {
-    const item = currentItem();
+    const item = structureTargetItem();
     const receiveList = q("structureReceiveList");
     const changeList = q("structureChangeList");
     const receiveEmpty = q("structureReceiveEmpty");
     const changeEmpty = q("structureChangeEmpty");
     const error = q("structureError");
+    const accountName = q("structureAccountName");
     note("structureError", "");
     receiveList.replaceChildren();
     changeList.replaceChildren();
     receiveEmpty.hidden = true;
     changeEmpty.hidden = true;
+    if (accountName) {
+      accountName.textContent = item
+        ? t("structure.accountLabel", { name: item.name || t("account.default") })
+        : "";
+    }
+    const scanBtn = q("structureScan");
     if (!item) {
+      if (scanBtn) scanBtn.hidden = true;
       receiveEmpty.hidden = false;
       receiveEmpty.textContent = t("addresses.empty");
       return;
     }
     if (item.kind !== "derived") {
+      if (scanBtn) scanBtn.hidden = true;
       receiveEmpty.hidden = false;
       receiveEmpty.textContent = t("structure.watchOnly");
       if (item.address) {
@@ -2589,6 +2798,7 @@ export function mountShell(document, {
       }
       return;
     }
+    if (scanBtn) scanBtn.hidden = false;
     if (!vault.status.unlocked) {
       receiveEmpty.hidden = false;
       receiveEmpty.textContent = t("structure.unlockRequired");
@@ -2609,7 +2819,8 @@ export function mountShell(document, {
     }
     error.textContent = "";
   }
-  async function openAccountStructure() {
+  async function openAccountStructure(accountId) {
+    state.structureAccountId = accountId || currentItem()?.id || "";
     show("screen-structure");
     setStructureScanning(false);
     await paintAccountStructure();
@@ -2622,7 +2833,7 @@ export function mountShell(document, {
     q("structureScanHint").hidden = !on;
   }
   async function scanAccountStructure() {
-    const item = currentItem();
+    const item = structureTargetItem();
     if (!item || item.kind !== "derived" || !vault.status.unlocked) {
       toast(t("structure.unlockRequired"));
       return;
@@ -3261,7 +3472,10 @@ export function mountShell(document, {
   });
   q("openNet").addEventListener("click", () => openNetwork("screen-settings"));
   q("welcomeNet").addEventListener("click", () => openNetwork("screen-welcome"));
-  q("netDot").addEventListener("click", () => openNetwork("screen-home"));
+  q("netDot").addEventListener("click", () => {
+    const from = state.screen;
+    openNetwork(from === "screen-activity" || from === "screen-settings" ? from : "screen-home");
+  });
   q("openPrivacy").addEventListener("click", () => show("screen-privacy"));
   q("openDonate").addEventListener("click", () => {
     paintDonateScreen();
@@ -3286,6 +3500,17 @@ export function mountShell(document, {
   q("openSource").addEventListener("click", () => {
     openExternal("https://github.com/RayMingyuan/pearl-wallet-extends", t("toast.openSourceManual"));
   });
+  q("checkUpdate").addEventListener("click", () => {
+    void checkForExtensionUpdate();
+  });
+  q("reloadForUpdate").addEventListener("click", () => {
+    try {
+      globalThis.chrome?.runtime?.reload?.();
+    } catch {
+      toast(t("update.checkFailed"));
+    }
+  });
+  installUpdateListeners();
   q("copyDonate").addEventListener("click", async () => {
     if (!donationConfigured()) {
       toast(t("toast.donateNotConfigured"));
@@ -3300,7 +3525,7 @@ export function mountShell(document, {
   });
   q("openRename").addEventListener("click", () => show("screen-rename"));
   q("openAddresses").addEventListener("click", () => { void openAddressManager(); });
-  q("openStructure").addEventListener("click", () => { void openAccountStructure(); });
+  q("openAccountsPreview").addEventListener("click", () => { void openAccountsPreview(); });
   q("structureScan").addEventListener("click", () => { void scanAccountStructure(); });
   q("netPresetList").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-profile]");
@@ -3532,20 +3757,21 @@ export function mountShell(document, {
     q("watchInput").value = "";
     await openHome();
   }
-  async function finishSelectWatch(password) {
-    const id = state.pendingWatchId;
-    if (!state.book.items.some((item) => item.id === id && item.kind === "watch")) return;
-    state.book.current = id;
-    await saveBook(password);
-    state.pendingWatchId = "";
-    sheet(false);
-    await openHome();
-  }
-  q("saveWatch").addEventListener("click", () => {
+  q("saveWatch").addEventListener("click", async () => {
+    if (q("saveWatch").dataset.busy === "1") return;
     const parsed = checkAddress(q("watchInput").value);
     if (!parsed.ok) { note("watchError", spokenAddress(parsed.error)); return; }
     state.pendingWatch = parsed.address;
-    askPassword("watch");
+    // Watch-only rows live in prlAccountBook only — never require the vault password.
+    q("saveWatch").dataset.busy = "1";
+    try {
+      note("watchError", "");
+      await finishWatch();
+    } catch (error) {
+      note("watchError", error instanceof Error ? speak(error) : t("toast.addFailed"));
+    } finally {
+      q("saveWatch").dataset.busy = "";
+    }
   });
   q("watchInput").addEventListener("input", () => {
     const value = q("watchInput").value.trim();
@@ -3863,6 +4089,9 @@ export function mountShell(document, {
     setLocale(DEFAULT_LOCALE);
     paintLocaleChrome();
   }
+    paintAppVersion();
+    await loadPendingUpdate();
+    paintUpdateBanner();
     try {
       await vault.init();
     } catch (error) {

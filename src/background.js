@@ -1,4 +1,5 @@
 const SESSION_KEY = "pearlUnlockedUntil";
+const UPDATE_PENDING_KEY = "pearlUpdatePending";
 
 export async function handleVaultMessage(message, {
   readVault,
@@ -78,6 +79,13 @@ function install() {
     }).then(sendResponse);
     return true;
   });
+  if (typeof chrome.runtime.onUpdateAvailable?.addListener === "function") {
+    chrome.runtime.onUpdateAvailable.addListener((details) => {
+      const version = typeof details?.version === "string" ? details.version.trim() : "";
+      if (!version) return;
+      void chrome.storage.session.set({ [UPDATE_PENDING_KEY]: version });
+    });
+  }
 }
 
 if (globalThis.chrome?.runtime?.onMessage) install();

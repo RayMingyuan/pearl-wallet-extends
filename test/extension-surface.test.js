@@ -52,12 +52,15 @@ test("built extension is MV3 with a fixed host and strict CSP", () => {
   assert.deepEqual(manifest.host_permissions, [
     `${ALLOWED_HTTPS}/*`,
     "https://blockbook.testnet.pearlresearch.ai/*",
+    "https://blockbook.testnet2.pearlnetwork.net/*",
     "https://api.coinbase.com/*",
     "https://api.exchange.coinbase.com/*",
     "https://api.coingecko.com/*",
   ]);
   assert.deepEqual(manifest.optional_host_permissions, ["http://*/*", "https://*/*"]);
   assert.equal(manifest.background.service_worker, "background.js");
+  assert.match(readFileSync(join(DIST, "background.js"), "utf8"), /onUpdateAvailable/);
+  assert.match(readFileSync(join(DIST, "background.js"), "utf8"), /pearlUpdatePending/);
   assert.equal(manifest.content_scripts, undefined);
   const csp = manifest.content_security_policy.extension_pages;
   assert.match(csp, /script-src 'self'/);
@@ -107,6 +110,7 @@ test("dist has no remote script, inline handler, sync storage or wallet-RPC entr
     "https://api.exchange.coinbase.com",
     ALLOWED_HTTPS,
     "https://blockbook.testnet.pearlresearch.ai",
+    "https://blockbook.testnet2.pearlnetwork.net",
     "https://github.com/RayMingyuan/pearl-wallet-extends",
     "https://pearla.net",
   ]);

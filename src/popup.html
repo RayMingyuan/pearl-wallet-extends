@@ -345,15 +345,12 @@
 
       <section class="screen settings-screen" id="screen-settings" hidden>
         <header class="settings-hero">
-          <img class="settings-pearl" src="icons/pearl.png" width="40" height="40" alt="" aria-hidden="true">
-          <div class="settings-hero-copy">
-            <h2 data-i18n="settings.title">Settings</h2>
-            <p class="settings-meta">
-              <span class="settings-chip" id="settingsNetBadge" data-i18n="net.mainnet">Mainnet</span>
-              <span class="settings-chip quiet">Pearla 1.0.0</span>
-            </p>
-          </div>
+          <h2 data-i18n="settings.title">Settings</h2>
         </header>
+        <div class="update-banner" id="updateBanner" hidden>
+          <p class="update-banner-text" id="updateBannerText"></p>
+          <button type="button" class="btn primary tiny" id="reloadForUpdate" data-i18n="update.reload">Restart to update</button>
+        </div>
 
         <section class="settings-block">
           <h3 data-i18n="settings.security">Security</h3>
@@ -390,9 +387,9 @@
               <span class="row-copy"><b data-i18n="settings.receiveAddresses">Receive addresses</b></span>
               <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
             </button>
-            <button type="button" class="rowlink" id="openStructure">
+            <button type="button" class="rowlink" id="openAccountsPreview">
               <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M5 8h14M5 16h14M8 8v8M16 8v8"/></svg></span>
-              <span class="row-copy"><b data-i18n="settings.accountStructure">Account structure</b></span>
+              <span class="row-copy"><b data-i18n="settings.accountsPreview">Account preview</b></span>
               <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
             </button>
             <button type="button" class="rowlink" id="openNet">
@@ -443,7 +440,14 @@
               <span class="row-value">GitHub</span>
               <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
             </button>
+            <button type="button" class="rowlink" id="checkUpdate" data-i18n-aria-label="settings.checkUpdateAria" aria-label="Check for updates">
+              <span class="row-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span>
+              <span class="row-copy stack"><b data-i18n="settings.version">Version</b><small class="row-sub" data-i18n="settings.checkUpdate">Check for updates</small></span>
+              <span class="row-value" id="appVersion">—</span>
+              <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
           </div>
+          <p class="hint" id="updateHint" hidden></p>
         </section>
 
         <section class="settings-block danger">
@@ -527,7 +531,7 @@
           <button type="button" class="net-option" data-profile="testnet" aria-checked="false">
             <span class="net-option-main">
               <b data-i18n="net.testnet">Testnet</b>
-              <small>blockbook.testnet.pearlresearch.ai</small>
+              <small>blockbook.testnet2.pearlnetwork.net</small>
             </span>
             <span class="net-option-mark" aria-hidden="true"></span>
           </button>
@@ -597,8 +601,16 @@
         <p class="hint" id="addressManageEmpty" hidden data-i18n="addresses.empty">No receive addresses to show yet.</p>
       </section>
 
+      <section class="screen" id="screen-accounts-preview" hidden>
+        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="preview.title">Account preview</h2></div>
+        <p class="sub" data-i18n="preview.sub">Derived accounts under this recovery phrase. Watch-only addresses are not listed here — manage them in the account drawer. Tap one account to inspect receive and change.</p>
+        <div class="addr-manage-list" id="accountsPreviewList"></div>
+        <p class="hint" id="accountsPreviewEmpty" hidden data-i18n="preview.empty">No accounts to show yet.</p>
+      </section>
+
       <section class="screen" id="screen-structure" hidden>
-        <div class="head"><button type="button" class="icon" data-back="screen-settings" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="structure.title">Account structure</h2></div>
+        <div class="head"><button type="button" class="icon" data-back="screen-accounts-preview" data-i18n-aria-label="action.back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button><h2 data-i18n="structure.title">Account structure</h2></div>
+        <p class="sub" id="structureAccountName"></p>
         <p class="sub" data-i18n="structure.sub">Read-only view of this account’s receive and change chains. Home still uses the first receive address. Do not share change addresses for payments.</p>
         <div class="structure-actions">
           <button type="button" class="btn ghost" id="structureScan" data-i18n="structure.scan">Scan chains for used addresses</button>

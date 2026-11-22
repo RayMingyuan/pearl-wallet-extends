@@ -17,7 +17,7 @@ export function getNetwork(name = "Pearl mainnet") {
 // Each public network has a Blockbook explorer with the same /tx/{txid} page. Local chains have none, so they get no link.
 const explorers = /* @__PURE__ */ Object.freeze({
   "Pearl mainnet": "https://blockbook.pearlresearch.ai",
-  "Pearl testnet": "https://blockbook.testnet.pearlresearch.ai",
+  "Pearl testnet": "https://blockbook.testnet2.pearlnetwork.net",
 });
 
 export function explorerTxUrl(network, txid) {

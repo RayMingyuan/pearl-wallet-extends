@@ -22,15 +22,6 @@ function checkNewPassword(password) {
   if (isShortUniformPassword(password)) throw err("err.vault.passwordUniformShort");
 }
 
-function watchRows(directory) {
-  return directory?.watch || [];
-}
-
-function watchRewritten(previous, next) {
-  const before = new Map(watchRows(previous).map((item) => [item.id, item.address]));
-  return watchRows(next).some((item) => !before.has(item.id) || before.get(item.id) !== item.address);
-}
-
 async function passwordKey(crypto, password, salt, usage) {
   checkPassword(password);
   const encoded = new TextEncoder().encode(password);
@@ -291,12 +282,13 @@ export function createVault({ storage, crypto = globalThis.crypto, idleMs = IDLE
     },
     projectedBook(current = null) {
       const directory = this.directory();
-      const { accounts, watch, imported } = projectAccounts(directory);
+      const { accounts, imported } = projectAccounts(directory);
       // After a network switch the sealed directory may still hold the previous network's address. The displayed book must be re-derived for the current session network.
       for (const item of accounts) {
         item.address = this.address(0, 0, item.account ?? 0);
       }
-      const items = [...accounts, ...imported, ...watch];
+      // Watch-only rows are not vault material; the shell merges them from prlAccountBook.
+      const items = [...accounts, ...imported];
       const active = items.some((item) => item.id === current) ? current : (items[0]?.id || "d0");
       return { current: active, items };
     },
@@ -321,7 +313,7 @@ export function createVault({ storage, crypto = globalThis.crypto, idleMs = IDLE
             ...item,
             receiveIndex: item.receiveIndex,
             changeIndex: item.changeIndex,
-          })).concat(projectAccounts(body).watch) }
+          })) }
           : null;
         const { directory } = buildDirectory({
           secret: { kind: secret.kind, value: secret.value, imports },
@@ -397,18 +389,6 @@ export function createVault({ storage, crypto = globalThis.crypto, idleMs = IDLE
           }
         }
         if (body.schemaVersion === 2 && publicDirectory(body) === publicDirectory(directory)) return;
-        if (watchRewritten(body, directory)) {
-          checkPassword(password);
-          const record = await storage.getVault();
-          const { salt, iv, ciphertext } = validateVaultRecord(record);
-          try {
-            const key = await passwordKey(crypto, password, salt, "decrypt");
-            await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: aad }, key, ciphertext);
-          } catch (error) {
-            if (error?.key) throw error;
-            throw err("err.vault.wrongPasswordNotWritten");
-          }
-        }
         const plaintext = new TextEncoder().encode(JSON.stringify(directory));
         try {
           await resealWithSession(plaintext, started);

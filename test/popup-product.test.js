@@ -570,18 +570,26 @@ test("send fee cards use block targets and paint selected rate while snapshot lo
   }
 });
 
-test("settings account structure lists receive and change from local cursors", async () => {
+test("settings account preview lists all accounts and drills into structure", async () => {
   const FIRST = ADDRESS;
   const SECOND = "prl1p3g3gq6f2mzke7f2vru90ep9erp9e6sgumrxw8akytd45s2zzctwsacrerl";
   const CHANGE0 = "prl1pegrplgs2f4d8e4qv425c946rtpg0dszjmuuahx5q4uw6tsdfysnqmufc97";
+  const OTHER = "prl1psayn40fkp3f3szxztahxwszhyjfxe3u9tqxycujd6q2zcw4uc99sm7r4na";
   const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
   let unlocked = true;
   let book = {
     current: "d0",
-    items: [{
-      id: "d0", name: "账户 1", kind: "derived", account: 0,
-      address: FIRST, receiveIndex: 1, changeIndex: 0, gapLimit: 2,
-    }],
+    items: [
+      {
+        id: "d0", name: "账户 1", kind: "derived", account: 0,
+        address: FIRST, receiveIndex: 1, changeIndex: 0, gapLimit: 2,
+      },
+      {
+        id: "d1", name: "账户 2", kind: "derived", account: 1,
+        address: OTHER, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+      },
+      { id: "w1", name: "观察地址", kind: "watch", address: OTHER },
+    ],
   };
   const previous = globalThis.document;
   globalThis.document = document;
@@ -591,7 +599,8 @@ test("settings account structure lists receive and change from local cursors", a
         get status() { return { exists: true, unlocked, ready: true }; },
         async init() {},
         lock() { unlocked = false; },
-        async address(branch, index) {
+        async address(branch, index, account = 0) {
+          if (account === 1) return OTHER;
           if (branch === 1) return CHANGE0;
           return index === 0 ? FIRST : SECOND;
         },
@@ -611,13 +620,32 @@ test("settings account structure lists receive and change from local cursors", a
     await until(() => !document.getElementById("screen-home").hidden);
     document.querySelector('#bottomNav button[data-tab="screen-settings"]').click();
     await until(() => !document.getElementById("screen-settings").hidden);
-    document.getElementById("openStructure").click();
+    assert.ok(document.getElementById("openAccountsPreview"));
+    assert.equal(document.getElementById("openStructure"), null);
+    document.getElementById("openAccountsPreview").click();
+    await until(() => !document.getElementById("screen-accounts-preview").hidden);
+    await until(() => document.getElementById("accountsPreviewList").children.length === 2);
+    assert.equal(document.getElementById("accountsPreviewList").children.length, 2);
+    assert.match(document.getElementById("accountsPreviewList").textContent, /账户 1/);
+    assert.match(document.getElementById("accountsPreviewList").textContent, /账户 2/);
+    assert.equal(document.getElementById("accountsPreviewList").textContent.includes("观察"), false);
+
+    document.querySelector("#accountsPreviewList .addr-row-main").click();
     await until(() => !document.getElementById("screen-structure").hidden);
     await until(() => document.getElementById("structureReceiveList").children.length >= 2);
+    assert.equal(document.getElementById("structureAccountName").textContent, "账户 1");
     assert.equal(document.getElementById("structureReceiveList").children.length, 2);
     assert.equal(document.getElementById("structureChangeList").children.length, 1);
     assert.match(document.getElementById("structureChangeList").textContent, /Change #0|找零 #0/);
     assert.equal(document.getElementById("structureScan").hidden, false);
+    assert.equal(document.querySelector("#screen-structure [data-back]").dataset.back, "screen-accounts-preview");
+
+    document.querySelector("#screen-structure [data-back]").click();
+    await until(() => !document.getElementById("screen-accounts-preview").hidden);
+    document.querySelectorAll("#accountsPreviewList .addr-row-main")[1].click();
+    await until(() => document.getElementById("structureAccountName").textContent === "账户 2");
+    await until(() => document.getElementById("structureReceiveList").children.length >= 1);
+    assert.equal(document.getElementById("structureReceiveList").children.length, 1);
     await app.ready.catch(() => {});
   } finally {
     globalThis.document = previous;
@@ -762,6 +790,114 @@ test("Receive stays on the first address; new address is temporary only", async 
     assert.match(document.getElementById("recvAddr").textContent, /sm7r4na/);
     assert.equal(document.getElementById("recvTempHint").hidden, true);
     await app.ready.catch(() => {});
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("watch addresses stay in the local book and never require vault password", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let unlocked = true;
+  let book = {
+    current: "d0",
+    items: [{
+      id: "d0", name: "账户 1", kind: "derived", account: 0,
+      address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+    }],
+  };
+  let noted = null;
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked, ready: true }; },
+        async init() {},
+        lock() { unlocked = false; },
+        async unlock() { unlocked = true; },
+        async address() { return ADDRESS; },
+        async projectedBook(current = null) {
+          return {
+            current: current || "d0",
+            items: book.items.filter((item) => item.kind !== "watch").map((item) => ({ ...item })),
+          };
+        },
+        async directory() { return { schemaVersion: 2, accounts: [], watch: [] }; },
+        async noteBook(next) { noted = next; },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() { return book; },
+        async setBook(next) { book = next; },
+        async getIdle() { return null; },
+      },
+      async fetchAddress() { return { balance: 0n, activity: [] }; },
+    });
+    await app.ready;
+    document.getElementById("accountSwitch").click();
+    document.getElementById("addMenuWatch").click();
+    await until(() => !document.getElementById("screen-watch").hidden);
+    document.getElementById("watchInput").value = ADDRESS;
+    document.getElementById("saveWatch").click();
+    await until(() => book.items.some((item) => item.kind === "watch"));
+    assert.equal(document.getElementById("screen-account-pw").hidden, true);
+    assert.ok(book.items.some((item) => item.kind === "watch" && item.address === ADDRESS));
+    assert.ok(noted?.items.some((item) => item.kind === "watch"));
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("account sheet rename stays open while editing and only saves on blur with a change", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  let book = {
+    current: "d0",
+    items: [{
+      id: "d0", name: "Account 1", kind: "derived", account: 0,
+      address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+    }],
+  };
+  let saves = 0;
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: true, unlocked: true, ready: true }; },
+        async init() {},
+        async address() { return ADDRESS; },
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return { version: 2 }; },
+        async getBook() { return book; },
+        async setBook(next) { saves += 1; book = next; },
+        async getIdle() { return null; },
+      },
+      async fetchAddress() { return { balance: 0n, activity: [] }; },
+    });
+    await app.ready;
+    document.getElementById("accountSwitch").click();
+    const rename = document.querySelector('[aria-label="Rename"]');
+    assert.ok(rename);
+    const beforeSaves = saves;
+    rename.click();
+    const input = document.querySelector("#accountList .name-edit");
+    assert.ok(input);
+    assert.equal(document.querySelector("#accountList .acct-main").hidden, true);
+    input.dispatchEvent(new document.defaultView.Event("click", { bubbles: true }));
+    input.value = "Account 123456778";
+    assert.equal(book.items[0].name, "Account 1");
+    assert.equal(saves, beforeSaves);
+    input.dispatchEvent(new document.defaultView.Event("blur", { bubbles: true }));
+    for (let i = 0; i < 50 && (book.items[0].name !== "Account 123456778" || document.querySelector("#accountList .name-edit")); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(book.items[0].name, "Account 123456778");
+    assert.ok(saves > beforeSaves);
+    assert.equal(document.querySelector("#accountList .name-edit"), null);
+    assert.equal(document.getElementById("switchName").textContent, "Account 123456778");
   } finally {
     globalThis.document = previous;
   }
@@ -1083,4 +1219,174 @@ test("home network chip opens the network screen and returns to home", async () 
   assert.equal(saved.networkId, "Pearl testnet");
   assert.equal(document.getElementById("screen-home").hidden, false);
   assert.equal(document.getElementById("netDotLabel").textContent, "Testnet");
+});
+
+test("network switch keeps watch addresses and restores them when returning", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const TESTNET_RECV = "tprl1pc8du0xq0z0gr3ft7eaqpdtztkjf9gzmjy3qmxxlgaymtxa0dcumq7wunsu";
+  let unlocked = true;
+  let networkId = "Pearl mainnet";
+  let book = {
+    current: "w1",
+    items: [
+      {
+        id: "d0", name: "Account 1", kind: "derived", account: 0,
+        address: ADDRESS, receiveIndex: 0, changeIndex: 0, gapLimit: 2,
+      },
+      { id: "w1", name: "观察地址", kind: "watch", address: ADDRESS },
+    ],
+  };
+  const app = mount(document, {
+    vault: {
+      get status() { return { exists: true, unlocked, ready: true }; },
+      async init() {},
+      async address() {
+        return networkId === "Pearl testnet" ? TESTNET_RECV : ADDRESS;
+      },
+      async noteBook(next) { book = next; },
+      async switchNetwork() {},
+      subscribe() { return () => {}; },
+    },
+    storage: {
+      async getVault() { return { version: 2 }; },
+      async getBook() { return book; },
+      async setBook(next) { book = next; },
+      async getMeta() { return {}; },
+      async setMeta() {},
+      async getIdle() { return null; },
+    },
+    async fetchAddress() { return { balance: 0n, activity: [] }; },
+    networkPrefs: { networkId: "Pearl mainnet", indexerMode: "default" },
+    async applyNetworkPrefs(draft) {
+      networkId = draft.networkId;
+      return draft;
+    },
+  });
+  await app.ready;
+  await until(() => document.getElementById("screen-home").hidden === false);
+  assert.ok(book.items.some((item) => item.id === "w1" && item.kind === "watch"));
+
+  document.getElementById("netDot").click();
+  document.querySelector('#netPresetList [data-profile="testnet"]').click();
+  await until(() => networkId === "Pearl testnet" && document.getElementById("netDotLabel").textContent === "Testnet");
+  assert.ok(book.items.some((item) => item.id === "w1" && item.address === ADDRESS));
+  assert.equal(book.current, "d0");
+
+  document.getElementById("netDot").click();
+  document.querySelector('#netPresetList [data-profile="mainnet"]').click();
+  await until(() => networkId === "Pearl mainnet" && document.getElementById("netDotLabel").textContent === "Mainnet");
+  assert.ok(book.items.some((item) => item.id === "w1" && item.kind === "watch" && item.address === ADDRESS));
+});
+
+test("activity and settings keep the same top network switcher as home", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const app = mount(document, {
+    vault: {
+      get status() { return { exists: false, unlocked: false, ready: true }; },
+      async init() {},
+      subscribe() { return () => {}; },
+    },
+    storage: {
+      async getVault() { return null; },
+      async getBook() {
+        return { current: "w1", items: [{ id: "w1", name: "Watch", kind: "watch", address: ADDRESS }] };
+      },
+      async setBook() {},
+    },
+    async fetchAddress() { return { balance: 0n, activity: [] }; },
+    networkPrefs: { networkId: "Pearl mainnet", indexerMode: "default" },
+  });
+  await app.ready;
+  await until(() => document.getElementById("screen-home").hidden === false);
+  assert.equal(document.getElementById("topBar").hidden, false);
+
+  document.querySelector('#bottomNav button[data-tab="screen-activity"]').click();
+  await until(() => !document.getElementById("screen-activity").hidden);
+  assert.equal(document.getElementById("topBar").hidden, false);
+  document.getElementById("netDot").click();
+  assert.equal(document.getElementById("screen-network").hidden, false);
+  assert.equal(document.querySelector("#screen-network [data-back]").dataset.back, "screen-activity");
+  document.querySelector("#screen-network [data-back]").click();
+  await until(() => !document.getElementById("screen-activity").hidden);
+
+  document.querySelector('#bottomNav button[data-tab="screen-settings"]').click();
+  await until(() => !document.getElementById("screen-settings").hidden);
+  assert.equal(document.getElementById("topBar").hidden, false);
+  assert.equal(document.getElementById("settingsNetBadge"), null);
+  assert.equal(document.getElementById("settingsVersionChip"), null);
+  document.getElementById("netDot").click();
+  assert.equal(document.getElementById("screen-network").hidden, false);
+  assert.equal(document.querySelector("#screen-network [data-back]").dataset.back, "screen-settings");
+});
+
+test("settings shows manifest version and can check for updates", async () => {
+  const { document } = parseHTML(readFileSync(new URL("../src/popup.html", import.meta.url), "utf8"));
+  const previousChrome = globalThis.chrome;
+  const session = {};
+  let checkCalls = 0;
+  let reloads = 0;
+  let updateListener = null;
+  globalThis.chrome = {
+    runtime: {
+      id: "pearl-pocket-test",
+      getManifest() { return { version: "1.0.1" }; },
+      async requestUpdateCheck() {
+        checkCalls += 1;
+        return { status: "no_update" };
+      },
+      reload() { reloads += 1; },
+      onUpdateAvailable: {
+        addListener(fn) { updateListener = fn; },
+      },
+    },
+    storage: {
+      session: {
+        async get(key) {
+          const name = typeof key === "string" ? key : Object.keys(key || {})[0];
+          return { [name]: session[name] };
+        },
+        async set(values) { Object.assign(session, values); },
+      },
+    },
+  };
+  try {
+    const app = mount(document, {
+      vault: {
+        get status() { return { exists: false, unlocked: false, ready: true }; },
+        async init() {},
+        subscribe() { return () => {}; },
+      },
+      storage: {
+        async getVault() { return null; },
+        async getBook() {
+          return { current: "w1", items: [{ id: "w1", name: "Watch", kind: "watch", address: ADDRESS }] };
+        },
+        async setBook() {},
+      },
+      async fetchAddress() { return { balance: 0n, activity: [] }; },
+    });
+    await app.ready;
+    document.querySelector('#bottomNav button[data-tab="screen-settings"]').click();
+    await until(() => !document.getElementById("screen-settings").hidden);
+    assert.equal(document.getElementById("appVersion").textContent, "1.0.1");
+    assert.equal(document.getElementById("topBar").hidden, false);
+    assert.equal(document.getElementById("netDotLabel").textContent, "Mainnet");
+    assert.equal(document.getElementById("updateBanner").hidden, true);
+
+    document.getElementById("checkUpdate").click();
+    await until(() => document.getElementById("updateHint").hidden === false);
+    assert.equal(checkCalls, 1);
+    assert.match(document.getElementById("updateHint").textContent, /latest version|已是最新/);
+
+    assert.ok(typeof updateListener === "function");
+    updateListener({ version: "1.0.2" });
+    await until(() => document.getElementById("updateBanner").hidden === false);
+    assert.match(document.getElementById("updateBannerText").textContent, /1\.0\.2/);
+    assert.equal(session.pearlUpdatePending, "1.0.2");
+
+    document.getElementById("reloadForUpdate").click();
+    assert.equal(reloads, 1);
+  } finally {
+    globalThis.chrome = previousChrome;
+  }
 });

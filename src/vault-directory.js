@@ -68,9 +68,8 @@ export function buildDirectory({ secret, book, network = "Pearl mainnet" }) {
         address,
       });
     }
-    const watch = (book?.items || [])
-      .filter((item) => item.kind === "watch" && typeof item.address === "string")
-      .map((item) => ({ id: item.id, name: item.name || "观察地址", address: item.address }));
+    // Watch-only addresses live in the plaintext account book (prlAccountBook), not the sealed vault.
+    // Keep an empty `watch` array for schema compatibility with older ciphertext.
     const imported = (secret.imports || []).filter((item) => item && item.key).map((item) => ({
       id: item.id || `k${item.address || ""}`,
       type: "imported",
@@ -86,7 +85,7 @@ export function buildDirectory({ secret, book, network = "Pearl mainnet" }) {
           ...imported,
         ],
         accounts,
-        watch,
+        watch: [],
       },
     };
   } finally { seed.fill(0); }
